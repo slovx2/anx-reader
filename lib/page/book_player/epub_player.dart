@@ -268,15 +268,17 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
   Future<void> goToHref(String href) async {
     await readerReady.future.timeout(const Duration(seconds: 30));
     if (!mounted) throw StateError('Reader closed');
-    await webViewController.evaluateJavascript(
-        source: "goToHref(${jsonEncode(href)})");
+    final result = await webViewController.callAsyncJavaScript(
+        functionBody: "await goToHref(${jsonEncode(href)}); return null;");
+    if (result?.error != null) throw StateError(result!.error.toString());
   }
 
   Future<void> goToCfi(String cfi) async {
     await readerReady.future.timeout(const Duration(seconds: 30));
     if (!mounted) throw StateError('Reader closed');
-    await webViewController.evaluateJavascript(
-        source: "goToCfi(${jsonEncode(cfi)})");
+    final result = await webViewController.callAsyncJavaScript(
+        functionBody: "await goToCfi(${jsonEncode(cfi)}); return null;");
+    if (result?.error != null) throw StateError(result!.error.toString());
   }
 
   void addAnnotation(BookNote bookNote) {
