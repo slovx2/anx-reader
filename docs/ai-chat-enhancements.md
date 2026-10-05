@@ -60,8 +60,30 @@ ANX_LIVE_CONFIG=/private/path/provider.json flutter test --no-pub test/service/a
 
 凭据文件不进入仓库；日志只记录档位、计数及合成文本。
 
-## 尚待环境验收
+## GitHub Actions 构建与本机安装（2026-10-05）
 
-- 尝试 `flutter build macos --debug --no-pub`，因机器只有 Command Line Tools、缺少完整 Xcode，`xcrun xcodebuild` 不可用而失败。构建工具自动修改的 macOS 工程文件已恢复。
-- 本机 macOS 26.5.1；App Store 安装 Xcode 被明确拒绝，提示需要 macOS 26.6。改用 Apple 官方兼容版 Xcode 26.5 下载页，目前需要用户完成 Apple 登录。没有升级操作系统，也没有覆盖 `/Applications/AnxReader.app`。
-- 同书分屏、弹层收起、首页打开和跨书跳转的真实桌面 WebView 验收尚未运行。需在完整 Xcode 环境构建后逐项检查聊天保留、章节／CFI 定位、旧页面销毁和文件失效提示。
+按用户要求停止本机 Xcode 安装，改为手动触发 `.github/workflows/build-macos-manual.yaml`。工作流使用 macOS 15、Xcode 26.2、项目指定 Flutter 版本，执行代码生成、静态检查、全量测试、release 构建和临时签名，上传带提交号及 SHA256 的 ZIP；不发布 Release。
+
+- [最终构建成功记录](https://github.com/slovx2/anx-reader/actions/runs/37262110429)，源码提交 `801c4de6d90a6d3e7901461a2569601780ae3d4a`。
+- CI 41 项离线测试通过，4 项真实端点测试按预期跳过；静态检查无 error，已有 warning/info 保留。
+- 校验 ZIP SHA256 和应用签名后，覆盖安装到 `/Applications/AnxReader.app`。版本 1.15.0，支持 arm64/x86_64；采用非商店数据目录，与原有安装一致。
+- 旧应用、数据库、配置及聊天历史保存在 `/Volumes/workspace/anx-reader-backups/20261005-114956`。未升级系统、未关闭系统安全保护。验收包使用临时签名，未做 Apple 公证。
+
+## 桌面 E2E 实证与边界
+
+使用两本自建 EPUB 和专门的引用会话，避免把个人书籍正文发送给服务端。最终包验证了：
+
+- 启动后原书库、Provider 和个人历史可用；重启后能恢复引用集合。
+- 聊天菜单恢复会话的「中／优先」选择。
+- 首页引用打开目标书；分屏引用定位至精确 CFI，正文显示预置暗号，聊天保留。
+- 跨书引用打开另一测试书的指定章节，重新展开聊天后仍为同一会话。
+- 弹层点击原文引用后自动收起，正文准确定位；未知引用显示明确提示。
+- 真实长文本流式回答期间上滚后，连续两次截图视口保持不变；手动滚回底部可查看最终回答。生成中的恢复跟随行为另由 Widget 测试覆盖。
+
+验收发现 WebView `evaluateJavascript` 对异步导航返回 Promise 时报告不支持的结果类型。已改为 `callAsyncJavaScript` 等待导航完成并返回空值，最终包同书、跨书及弹层回归通过，未再出现该错误或重复 GlobalKey 错误。
+
+运行中记录到 Flutter 辅助功能树刷新错误（`Failed to update ui::AXTree`），部分控件的辅助功能状态滞后，坐标点击仍可操作。弹层自动化文本输入也未稳定成功，因此没有把「桌面真实搜索生成引用」计为通过；工具登记由单元测试覆盖，真实协议工具循环由前述接口测试覆盖。辅助功能错误的根因尚未确定，不能据此宣称完整无障碍验收通过。
+
+仍未做真实 Claude/Gemini 调用、真实 encrypted reasoning 回传和所有文件失效场景的桌面验收。凭据或上游行为相关限制见真实端点记录，不用 mock 结果代替。
+
+测试结束已定向移除两本合成书、对应阅读记录和三个测试会话，保留两条原有个人会话，恢复原来的自适应聊天显示模式。Provider 地址、密钥、协议和模型未改动；正常请求更新的密钥轮转索引及更新时间保留。截图及运行日志位于备份目录的 `e2e-evidence` 子目录，未提交含本机数据的日志。
