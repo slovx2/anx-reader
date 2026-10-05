@@ -10,12 +10,14 @@ class StyledMarkdown extends StatelessWidget {
   final String data;
   final bool selectable;
   final double? fontSize;
+  final bool Function(String href)? onLinkTap;
 
   const StyledMarkdown({
     super.key,
     required this.data,
     this.selectable = true,
     this.fontSize,
+    this.onLinkTap,
   });
 
   @override
@@ -28,8 +30,10 @@ class StyledMarkdown extends StatelessWidget {
           followLinkColor: true,
           style:
               baseFontSize != null ? TextStyle(fontSize: baseFontSize) : null,
-          onLinkTap: (href, text) =>
-              launchUrlString(href, mode: LaunchMode.externalApplication),
+          onLinkTap: (href, text) {
+            if (onLinkTap?.call(href) == true) return;
+            launchUrlString(href, mode: LaunchMode.externalApplication);
+          },
           linkBuilder: (context, text, url, style) => Text.rich(
                 text,
                 style: style.copyWith(

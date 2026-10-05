@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:anx_reader/dao/book.dart';
 import 'package:anx_reader/dao/theme.dart';
@@ -10,7 +11,6 @@ import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/current_reading_state.dart';
 import 'package:anx_reader/page/home_page.dart';
 import 'package:anx_reader/page/iap_page.dart';
-import 'package:anx_reader/providers/ai_chat.dart';
 import 'package:anx_reader/providers/chapter_content_bridge.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/providers/sync.dart';
@@ -419,28 +419,36 @@ Future<void> importBook(File file, WidgetRef ref) async {
   ref.read(bookListProvider.notifier).refresh();
 }
 
+Completer<void>? _readingPageClosed;
+
 Future<void> pushToReadingPage(
   WidgetRef ref,
   BuildContext context,
   Book book, {
   String? cfi,
   String? heroTag,
+  ProviderContainer? providerContainer,
+  Completer<void>? readerReady,
 }) async {
+  final container =
+      providerContainer ?? ProviderScope.containerOf(context, listen: false);
+  final navigator = navigatorKey.currentState!;
   if (book.isDeleted) {
     AnxToast.show(L10n.of(context).bookDeleted);
     return;
   }
 
   if (!File(book.fileFullPath).existsSync()) {
-    ref.read(syncProvider.notifier).downloadBook(book);
+    container.read(syncProvider.notifier).downloadBook(book);
     return;
   }
 
   if (EnvVar.enableInAppPurchase) {
-    final iapAsync = ref.read(iapProvider);
+    final iapAsync = container.read(iapProvider);
     final isFeatureAvailable = iapAsync.maybeWhen(
       data: (state) => state.isFeatureAvailable,
-      orElse: () => ref.read(iapProvider.notifier).cachedFeatureAvailable(),
+      orElse: () =>
+          container.read(iapProvider.notifier).cachedFeatureAvailable(),
     );
 
     if (!isFeatureAvailable) {
@@ -452,21 +460,31 @@ Future<void> pushToReadingPage(
       return;
     }
   }
-  ref.read(aiChatProvider.notifier).clear();
+  // 先销毁旧阅读页，再启动新状态，避免全局 Key 和清理回调互相覆盖。
+  final oldContext = readingPageKey.currentContext;
+  final oldRoute = oldContext == null ? null : ModalRoute.of(oldContext);
+  if (oldRoute != null) {
+    final oldClosed = _readingPageClosed;
+    navigator.removeRoute(oldRoute);
+    await oldRoute.completed;
+    if (oldClosed != null) await oldClosed.future;
+  }
   final initialThemes = await themeDao.selectThemes();
-  ref.read(currentReadingProvider.notifier).start(
+  container.read(currentReadingProvider.notifier).start(
         CurrentReadingState(
           book: book,
           cfi: cfi,
         ),
       );
 
-  final currentReading = ref.read(currentReadingProvider.notifier);
-  final chapterContentBridge = ref.read(chapterContentBridgeProvider.notifier);
-  final tocSearch = ref.read(tocSearchProvider.notifier);
+  final currentReading = container.read(currentReadingProvider.notifier);
+  final chapterContentBridge =
+      container.read(chapterContentBridgeProvider.notifier);
+  final tocSearch = container.read(tocSearchProvider.notifier);
 
-  await Navigator.push(
-    navigatorKey.currentContext!,
+  final closed = _readingPageClosed = Completer<void>();
+  await navigator
+      .push(
     CupertinoPageRoute(
       builder: (c) => ReadingPage(
         key: readingPageKey,
@@ -474,14 +492,17 @@ Future<void> pushToReadingPage(
         cfi: cfi,
         initialThemes: initialThemes,
         heroTag: heroTag,
+        readerReady: readerReady,
       ),
     ),
-  ).then((_) {
+  )
+      .then((_) {
     AnxLog.info('ReadingPage: poped: ${book.title}');
     currentReading.finish();
     chapterContentBridge.state = null;
     tocSearch.clear();
     AnxLog.info('Pop successfully ReadingPage: ${book.title}');
+    if (!closed.isCompleted) closed.complete();
   });
 }
 

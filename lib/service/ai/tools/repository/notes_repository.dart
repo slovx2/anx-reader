@@ -17,6 +17,7 @@ class NoteSearchResult {
     return {
       'bookId': book.id,
       'bookTitle': book.title,
+      'md5': book.md5,
       'author': book.author,
       'noteId': note.id,
       'chapter': note.chapter,

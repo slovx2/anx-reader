@@ -42,7 +42,7 @@ class _ModelPickerDialogState extends State<_ModelPickerDialog> {
   String? _fetchError;
 
   bool get _canFetch =>
-      widget.provider.protocol == AiProtocol.openai &&
+      widget.provider.protocol.isOpenAi &&
       widget.provider.hasValidKey &&
       widget.provider.url.isNotEmpty;
 

@@ -4,12 +4,21 @@ import 'dart:convert';
 import 'package:anx_reader/utils/ai_reasoning_parser.dart';
 import 'package:anx_reader/utils/log/common.dart';
 import 'package:langchain/langchain.dart';
+import 'chat_session.dart';
 
 class CancelableLangchainRunner {
   static const String thinkTag = '<think/>';
   StreamSubscription<ChatResult>? _subscription;
+  BaseChatModel? _activeModel;
+  AiChatSession? _activeSession;
+  Completer<void>? _cancelSignal;
 
   void cancel() {
+    if (_activeSession?.status == AiRunStatus.running) {
+      _activeSession!.cancel();
+    }
+    if (_cancelSignal?.isCompleted == false) _cancelSignal!.complete();
+    _activeModel?.close();
     _subscription?.cancel();
     _subscription = null;
   }
@@ -17,7 +26,11 @@ class CancelableLangchainRunner {
   Stream<String> stream({
     required BaseChatModel model,
     required PromptValue prompt,
+    required AiChatSession session,
   }) {
+    _activeModel = model;
+    _activeSession = session;
+    final cancelled = _cancelSignal = Completer<void>();
     String thinkBuffer = '';
     String answerBuffer = '';
     bool reasoningDetected = false;
@@ -26,6 +39,9 @@ class CancelableLangchainRunner {
     late StreamController<String> controller;
     controller = StreamController<String>(
       onListen: () {
+        cancelled.future.then((_) {
+          if (!controller.isClosed) controller.close();
+        });
         final source = model.stream(prompt);
         _subscription = source.listen(
           (event) {
@@ -72,7 +88,7 @@ class CancelableLangchainRunner {
             }
           },
           onError: (Object error, StackTrace stackTrace) {
-            if (!controller.isClosed) {
+            if (!controller.isClosed && !cancelled.isCompleted) {
               controller.addError(error, stackTrace);
             }
           },
@@ -106,8 +122,16 @@ class CancelableLangchainRunner {
     required String input,
     ChatMessage? systemMessage,
     int maxIterations = 120,
+    required AiChatSession session,
   }) {
+    _activeModel = model;
+    _activeSession = session;
+    final cancelled = _cancelSignal = Completer<void>();
     final controller = StreamController<String>();
+    controller.onCancel = () {
+      if (!cancelled.isCompleted) cancelled.complete();
+      model.close();
+    };
 
     Future<void>(() async {
       final parser = const ToolsAgentOutputParser();
@@ -183,7 +207,9 @@ class CancelableLangchainRunner {
       var streamFailed = false;
 
       try {
-        while (iterations < maxIterations && !controller.isClosed) {
+        while (iterations < maxIterations &&
+            !controller.isClosed &&
+            !cancelled.isCompleted) {
           final promptMessages = buildConversation();
           if (promptMessages.isEmpty) {
             throw StateError('Agent prompt messages cannot be empty');
@@ -218,6 +244,10 @@ class CancelableLangchainRunner {
               }
             },
             onError: (Object error, StackTrace stack) {
+              if (cancelled.isCompleted) {
+                if (!completer.isCompleted) completer.complete();
+                return;
+              }
               streamFailed = true;
               if (!controller.isClosed) {
                 controller.addError(error, stack);
@@ -235,7 +265,8 @@ class CancelableLangchainRunner {
             cancelOnError: true,
           );
 
-          await completer.future;
+          await Future.any([completer.future, cancelled.future]);
+          if (cancelled.isCompleted) break;
 
           if (aggregated == null) {
             throw StateError('Model returned no output');
@@ -251,6 +282,7 @@ class CancelableLangchainRunner {
 
           var shouldStop = false;
           for (final action in actions) {
+            if (cancelled.isCompleted) break;
             if (action is AgentFinish) {
               shouldStop = true;
               break;
@@ -280,8 +312,12 @@ class CancelableLangchainRunner {
                 message = 'Invalid tool input: $e';
               }
               final observation = message == null
-                  ? await tool.invoke(toolInput)
+                  ? await Future.any([
+                      tool.invoke(toolInput),
+                      cancelled.future.then((_) => '')
+                    ])
                   : 'Error: $message';
+              if (cancelled.isCompleted) break;
               final observationText = observation.toString();
               toolStep.status = ToolStepStatus.success;
               toolStep.output = observationText;
@@ -302,6 +338,7 @@ class CancelableLangchainRunner {
               toolStep.observation = message;
               appendReplyChunk('Tool ${agentAction.tool} failed: $message');
               emit();
+              session.status = AiRunStatus.failed;
               shouldStop = true;
               break;
             }
@@ -321,8 +358,11 @@ class CancelableLangchainRunner {
 
           iterations += 1;
         }
+        if (iterations >= maxIterations) {
+          throw StateError('Agent reached iteration limit');
+        }
       } catch (error, stack) {
-        if (!controller.isClosed && !streamFailed) {
+        if (!controller.isClosed && !streamFailed && !cancelled.isCompleted) {
           controller.addError(error, stack);
         }
       } finally {

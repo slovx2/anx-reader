@@ -79,6 +79,7 @@ class EpubPlayer extends ConsumerStatefulWidget {
 
 class EpubPlayerState extends ConsumerState<EpubPlayer>
     with TickerProviderStateMixin {
+  final Completer<void> readerReady = Completer<void>();
   late InAppWebViewController webViewController;
   late ContextMenu contextMenu;
   String cfi = '';
@@ -264,11 +265,19 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     ''');
   }
 
-  void goToHref(String href) =>
-      webViewController.evaluateJavascript(source: "goToHref('$href')");
+  Future<void> goToHref(String href) async {
+    await readerReady.future.timeout(const Duration(seconds: 30));
+    if (!mounted) throw StateError('Reader closed');
+    await webViewController.evaluateJavascript(
+        source: "goToHref(${jsonEncode(href)})");
+  }
 
-  void goToCfi(String cfi) =>
-      webViewController.evaluateJavascript(source: "goToCfi('$cfi')");
+  Future<void> goToCfi(String cfi) async {
+    await readerReady.future.timeout(const Duration(seconds: 30));
+    if (!mounted) throw StateError('Reader closed');
+    await webViewController.evaluateJavascript(
+        source: "goToCfi(${jsonEncode(cfi)})");
+  }
 
   void addAnnotation(BookNote bookNote) {
     final noteContent =
@@ -334,7 +343,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     await webViewController.evaluateJavascript(source: 'clearSearch()');
     await webViewController.evaluateJavascript(
       source:
-        'search($escaped, {"scope":"book","matchCase":false,"matchDiacritics":false,"matchWholeWords":false})',
+          'search($escaped, {"scope":"book","matchCase":false,"matchDiacritics":false,"matchWholeWords":false})',
     );
   }
 
@@ -648,6 +657,7 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     controller.addJavaScriptHandler(
         handlerName: 'onLoadEnd',
         callback: (args) {
+          if (!readerReady.isCompleted) readerReady.complete();
           widget.onLoadEnd();
         });
 

@@ -112,7 +112,7 @@ class AiProviders extends _$AiProviders {
   }
 
   /// Add a new custom provider
-  void addProvider(AiProvider provider) {
+  String addProvider(AiProvider provider) {
     final now = DateTime.now();
     final newProvider = provider.copyWith(
       id: const Uuid().v4(),
@@ -122,6 +122,7 @@ class AiProviders extends _$AiProviders {
 
     state = [...state, newProvider];
     Prefs().saveAiProviders(state);
+    return newProvider.id;
   }
 
   /// Update an existing provider

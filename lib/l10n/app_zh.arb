@@ -919,5 +919,13 @@
     "searchEngineUrlTemplate": "URL 模板",
     "searchEngineUrlRequired": "请输入 URL 模板",
     "searchEngineUrlInvalid": "URL 必须包含搜索查询占位符且使用 http/https 协议",
-    "searchEngineAdded": "搜索引擎已添加"
+    "searchEngineAdded": "搜索引擎已添加",
+  "aiChatOptionDefault": "默认",
+  "aiChatServiceTier": "服务档位",
+  "aiChatPriority": "优先",
+  "aiCitationUnavailable": "当前会话中没有这条引用。",
+  "aiCitationBookUnavailable": "引用的书籍已删除或文件不可用。",
+  "aiCitationFileChanged": "书籍文件已改变，无法可靠定位这条引用。",
+  "aiCitationWait": "请在生成完成或停止后打开引用。",
+  "aiCitationOpenFailed": "无法打开引用位置。"
 }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'openai_codec.dart';
 
 /// Fetches the list of available model IDs from an OpenAI-compatible /models endpoint.
 ///
@@ -10,7 +11,7 @@ Future<List<String>> fetchAiModels({
   required String apiKey,
   Duration timeout = const Duration(seconds: 10),
 }) async {
-  final baseUrl = url.trim();
+  final baseUrl = openAiBaseUrl(url);
   final modelsUrl =
       baseUrl.endsWith('/') ? '${baseUrl}models' : '$baseUrl/models';
 

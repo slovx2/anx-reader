@@ -3,20 +3,26 @@ import 'dart:io';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/current_reading.dart';
+import 'package:anx_reader/providers/book_toc.dart';
+import 'package:anx_reader/models/toc_item.dart';
 import 'package:anx_reader/service/ai/tools/ai_tool_registry.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:langchain_anthropic/langchain_anthropic.dart';
 import 'package:langchain_core/chat_models.dart';
 import 'package:langchain_core/tools.dart';
 import 'package:langchain_google/langchain_google.dart';
-import 'package:langchain_openai/langchain_openai.dart';
 
 import 'langchain_ai_config.dart';
+import 'chat_session.dart';
+import 'openai_http_model.dart';
+import 'citations.dart';
 
 /// Factory responsible for building chat models based on user preferences.
 class LangchainAiRegistry {
-  const LangchainAiRegistry(this.ref);
+  LangchainAiRegistry(this.ref, {AiChatSession? session})
+      : session = session ?? AiChatSession();
   final WidgetRef? ref;
+  final AiChatSession session;
 
   LangchainPipeline resolve(
     LangchainAiConfig config, {
@@ -67,21 +73,20 @@ class LangchainAiRegistry {
           useAgent: useAgent,
         );
       case AiProtocol.openai:
+      case AiProtocol.openaiResponses:
         return _buildPipeline(
           config,
-          _buildOpenAi(config),
+          OpenAiHttpModel(
+              config: config,
+              responses: protocol == AiProtocol.openaiResponses,
+              session: session),
           useAgent: useAgent,
         );
     }
   }
 
   BaseChatModel _buildOpenAi(LangchainAiConfig config) {
-    return ChatOpenAI(
-      apiKey: config.apiKey.isEmpty ? null : config.apiKey,
-      baseUrl: config.baseUrl ?? 'https://api.openai.com/v1',
-      headers: config.headers.isEmpty ? null : config.headers,
-      defaultOptions: config.toOpenAIOptions(),
-    );
+    return OpenAiHttpModel(config: config, responses: false, session: session);
   }
 
   BaseChatModel _buildAnthropic(LangchainAiConfig config) {
@@ -120,7 +125,44 @@ class LangchainAiRegistry {
     if (useAgent) {
       final enabledIds = Prefs().enabledAiToolIds;
       final toolContext = AiToolContext(ref: ref!);
-      tools = AiToolRegistry.buildTools(toolContext, enabledIds);
+      final citationRegistry = AiCitationRegistry(session);
+      tools = AiToolRegistry.buildTools(toolContext, enabledIds)
+          .map((tool) => Tool.fromFunction<Map<String, dynamic>, String>(
+                name: tool.name,
+                description: tool.description,
+                returnDirect: tool.returnDirect,
+                inputJsonSchema: tool.inputJsonSchema,
+                getInputFromJson: (json) => json,
+                func: (input) async {
+                  final reading = ref!.read(currentReadingProvider);
+                  final output =
+                      (await tool.invoke(tool.getInputFromJson(input)))
+                          .toString();
+                  if (session.status == AiRunStatus.cancelled) return output;
+                  String? chapterTitle(List<TocItem> items, String? href) {
+                    for (final item in items) {
+                      if (item.href == href) return item.label;
+                      final nested = chapterTitle(item.subitems, href);
+                      if (nested != null) return nested;
+                    }
+                    return null;
+                  }
+
+                  final chapter = tool.name == 'chapter_content_by_href'
+                      ? chapterTitle(ref!.read(bookTocProvider),
+                              input['href'] as String?) ??
+                          ''
+                      : reading.chapterTitle ?? '';
+                  return citationRegistry.enrich(tool.name, output,
+                      bookId: reading.book?.id,
+                      md5: reading.book?.md5,
+                      chapter: chapter,
+                      href: tool.name == 'chapter_content_by_href'
+                          ? input['href'] as String?
+                          : reading.chapterHref);
+                },
+              ))
+          .toList();
       final enabledDefs = AiToolRegistry.definitions
           .where((def) => enabledIds.contains(def.id))
           .toList(growable: false);
@@ -238,6 +280,7 @@ You can also use LaTeX for mathematical expressions. Here's an example:
 - **Out of scope** → Clearly state limitations and suggest manual alternatives
 
 ## Important Constraints
+- Cite book passages using the exact Markdown citation links returned by tools (anx://citation/...). Never invent citation IDs, CFI locations or page numbers. Chapter-only citations must be labelled as chapter links. Include citations alongside claims grounded in retrieved text.
 - Respect user privacy - only access data through provided tools
 - Stay focused on reading-related assistance
 - Don't make assumptions about unavailable data

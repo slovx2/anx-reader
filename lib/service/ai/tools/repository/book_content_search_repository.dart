@@ -89,6 +89,7 @@ class BookContentSearchRepository {
       return {
         'bookId': book.id,
         'bookTitle': book.title,
+        'md5': book.md5,
         'keyword': keyword,
         'results': response.results.map((result) => result.toMap()).toList(),
         'searchDurationMs': response.duration.inMilliseconds,
@@ -146,6 +147,7 @@ class BookContentSearchRepository {
       return {
         'bookId': book.id,
         'bookTitle': book.title,
+        'md5': book.md5,
         'keyword': keyword,
         'results': mapped.map((result) => result.toMap()).toList(),
         'searchDurationMs': stopwatch.elapsed.inMilliseconds,

@@ -7,7 +7,6 @@ import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:anx_reader/widgets/common/anx_button.dart';
-import 'package:anx_reader/widgets/common/anx_segmented_button.dart';
 import 'package:anx_reader/widgets/common/container/filled_container.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,6 +31,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   late TextEditingController _urlController;
   late TextEditingController _modelController;
 
+  String? _providerId;
   AiProtocol _selectedProtocol = AiProtocol.openai;
   AiReasoningEffort _reasoningEffort = AiReasoningEffort.auto;
   List<AiApiKey> _apiKeys = [];
@@ -42,11 +42,10 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   @override
   void initState() {
     super.initState();
+    _providerId = widget.providerId;
 
-    final provider = widget.providerId != null
-        ? ref
-            .read(aiProvidersProvider)
-            .firstWhere((p) => p.id == widget.providerId)
+    final provider = _providerId != null
+        ? ref.read(aiProvidersProvider).firstWhere((p) => p.id == _providerId)
         : null;
 
     _nameController = TextEditingController(text: provider?.title ?? '');
@@ -72,15 +71,13 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   @override
   Widget build(BuildContext context) {
     final l10n = L10n.of(context);
-    final provider = widget.providerId != null
-        ? ref
-            .watch(aiProvidersProvider)
-            .firstWhere((p) => p.id == widget.providerId)
+    final provider = _providerId != null
+        ? ref.watch(aiProvidersProvider).firstWhere((p) => p.id == _providerId)
         : null;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.providerId == null
+        title: Text(_providerId == null
             ? l10n.settingsAiProvidersAdd
             : l10n.settingsAiProviderName),
         actions: [
@@ -110,25 +107,27 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
             Text(l10n.settingsAiProviderProtocol,
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
-            AnxSegmentedButton<AiProtocol>(
-              selected: {_selectedProtocol},
-              segments: [
-                SegmentButtonItem(
-                  value: AiProtocol.openai,
-                  label: l10n.settingsAiProviderProtocolOpenai,
-                ),
-                SegmentButtonItem(
-                  value: AiProtocol.claude,
-                  label: l10n.settingsAiProviderProtocolClaude,
-                ),
-                SegmentButtonItem(
-                  value: AiProtocol.gemini,
-                  label: l10n.settingsAiProviderProtocolGemini,
-                ),
+            DropdownButtonFormField<AiProtocol>(
+              initialValue: _selectedProtocol,
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem(
+                    value: AiProtocol.openai,
+                    child: Text('OpenAI Chat Completions')),
+                const DropdownMenuItem(
+                    value: AiProtocol.openaiResponses,
+                    child: Text('OpenAI Responses')),
+                DropdownMenuItem(
+                    value: AiProtocol.claude,
+                    child: Text(l10n.settingsAiProviderProtocolClaude)),
+                DropdownMenuItem(
+                    value: AiProtocol.gemini,
+                    child: Text(l10n.settingsAiProviderProtocolGemini)),
               ],
-              onSelectionChanged: (Set<AiProtocol> selection) {
+              onChanged: (protocol) {
+                if (protocol == null) return;
                 setState(() {
-                  _selectedProtocol = selection.first;
+                  _selectedProtocol = protocol;
                   _isModified = true;
                 });
               },
@@ -141,7 +140,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
               decoration: InputDecoration(
                 labelText: l10n.settingsAiProviderUrl,
                 border: const OutlineInputBorder(),
-                helperText: _selectedProtocol == AiProtocol.openai
+                helperText: _selectedProtocol.isOpenAi
                     ? l10n.settingsAiProviderUrlHint
                     : null,
               ),
@@ -160,7 +159,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
                     ),
                   ),
                 ),
-                if (_selectedProtocol == AiProtocol.openai) ...[
+                if (_selectedProtocol.isOpenAi) ...[
                   const SizedBox(width: 8),
                   AnxButton(
                     key: _fetchButtonKey,
@@ -609,32 +608,33 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
     }
 
     final provider = AiProvider(
-      id: widget.providerId ?? const Uuid().v4(),
+      id: _providerId ?? const Uuid().v4(),
       title: _nameController.text,
       url: _urlController.text,
       protocol: _selectedProtocol,
       enabled: true,
-      isBuiltin: widget.providerId != null
+      isBuiltin: _providerId != null
           ? ref
               .read(aiProvidersProvider)
-              .firstWhere((p) => p.id == widget.providerId)
+              .firstWhere((p) => p.id == _providerId)
               .isBuiltin
           : false,
       apiKeys: _apiKeys,
       model: _modelController.text,
       reasoningEffort: _reasoningEffort,
       keyIndex: 0,
-      createdAt: widget.providerId != null
+      createdAt: _providerId != null
           ? ref
               .read(aiProvidersProvider)
-              .firstWhere((p) => p.id == widget.providerId)
+              .firstWhere((p) => p.id == _providerId)
               .createdAt
           : DateTime.now(),
       updatedAt: DateTime.now(),
     );
 
-    if (widget.providerId == null) {
-      ref.read(aiProvidersProvider.notifier).addProvider(provider);
+    if (_providerId == null) {
+      _providerId =
+          ref.read(aiProvidersProvider.notifier).addProvider(provider);
     } else {
       ref.read(aiProvidersProvider.notifier).updateProvider(provider);
     }
@@ -646,7 +646,8 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
   void _testConnection() {
     final l10n = L10n.of(context);
 
-    final enabledKeys = _apiKeys.where((k) => k.enabled && k.key.trim().isNotEmpty);
+    final enabledKeys =
+        _apiKeys.where((k) => k.enabled && k.key.trim().isNotEmpty);
     if (_urlController.text.trim().isEmpty ||
         _modelController.text.trim().isEmpty ||
         enabledKeys.isEmpty) {
@@ -665,31 +666,32 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
         return;
       }
       final provider = AiProvider(
-        id: widget.providerId ?? const Uuid().v4(),
+        id: _providerId ?? const Uuid().v4(),
         title: _nameController.text,
         url: _urlController.text,
         protocol: _selectedProtocol,
         enabled: true,
-        isBuiltin: widget.providerId != null
+        isBuiltin: _providerId != null
             ? ref
                 .read(aiProvidersProvider)
-                .firstWhere((p) => p.id == widget.providerId)
+                .firstWhere((p) => p.id == _providerId)
                 .isBuiltin
             : false,
         apiKeys: _apiKeys,
         model: _modelController.text,
         reasoningEffort: _reasoningEffort,
         keyIndex: 0,
-        createdAt: widget.providerId != null
+        createdAt: _providerId != null
             ? ref
                 .read(aiProvidersProvider)
-                .firstWhere((p) => p.id == widget.providerId)
+                .firstWhere((p) => p.id == _providerId)
                 .createdAt
             : DateTime.now(),
         updatedAt: DateTime.now(),
       );
-      if (widget.providerId == null) {
-        ref.read(aiProvidersProvider.notifier).addProvider(provider);
+      if (_providerId == null) {
+        _providerId =
+            ref.read(aiProvidersProvider.notifier).addProvider(provider);
       } else {
         ref.read(aiProvidersProvider.notifier).updateProvider(provider);
       }
@@ -706,7 +708,7 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
           width: double.maxFinite,
           child: AiStream(
             prompt: generatePromptTest(),
-            identifier: widget.providerId,
+            identifier: _providerId,
             regenerate: true,
           ),
         ),

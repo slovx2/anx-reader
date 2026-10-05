@@ -7,11 +7,14 @@ part 'ai_provider.g.dart';
 /// AI protocol type enumeration
 enum AiProtocol {
   openai('openai'),
+  openaiResponses('openaiResponses'),
   claude('claude'),
   gemini('gemini');
 
   const AiProtocol(this.code);
   final String code;
+
+  bool get isOpenAi => this == openai || this == openaiResponses;
 
   static AiProtocol fromCode(String code) {
     return AiProtocol.values.firstWhere(
@@ -43,6 +46,23 @@ abstract class AiProvider with _$AiProvider {
     DateTime? updatedAt, // Last update time
   }) = _AiProvider;
 
+  // 自定义 fromJson 不会生成 Provider 的序列化方法，需显式持久化全部字段。
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'logoAsset': logoAsset,
+        'url': url,
+        'protocol': protocol.code,
+        'enabled': enabled,
+        'isBuiltin': isBuiltin,
+        'apiKeys': apiKeys.map((key) => key.toJson()).toList(),
+        'model': model,
+        'reasoningEffort': reasoningEffort.code,
+        'keyIndex': keyIndex,
+        'createdAt': createdAt?.toIso8601String(),
+        'updatedAt': updatedAt?.toIso8601String(),
+      };
+
   factory AiProvider.fromJson(Map<String, dynamic> json) {
     String requireString(String key) {
       final value = json[key];
@@ -68,28 +88,26 @@ abstract class AiProvider with _$AiProvider {
       ),
       enabled: json['enabled'] as bool? ?? true,
       isBuiltin: json['isBuiltin'] as bool? ?? false,
-      apiKeys: (json['apiKeys'] as List<dynamic>?)
-              ?.map((e) {
-                if (e is! Map<String, dynamic>) {
-                  throw FormatException('AiApiKey entry must be an object');
-                }
-                final key = e['key'];
-                if (key == null) {
-                  throw FormatException('AiApiKey.key is required but was null');
-                }
-                return AiApiKey(
-                  id: (e['id'] ?? '').toString().isEmpty
-                      ? DateTime.now().microsecondsSinceEpoch.toString()
-                      : e['id'].toString(),
-                  key: key.toString(),
-                  enabled: e['enabled'] as bool? ?? true,
-                  label: e['label']?.toString(),
-                  createdAt: e['createdAt'] == null
-                      ? null
-                      : DateTime.tryParse(e['createdAt'].toString()),
-                );
-              })
-              .toList() ??
+      apiKeys: (json['apiKeys'] as List<dynamic>?)?.map((e) {
+            if (e is! Map<String, dynamic>) {
+              throw FormatException('AiApiKey entry must be an object');
+            }
+            final key = e['key'];
+            if (key == null) {
+              throw FormatException('AiApiKey.key is required but was null');
+            }
+            return AiApiKey(
+              id: (e['id'] ?? '').toString().isEmpty
+                  ? DateTime.now().microsecondsSinceEpoch.toString()
+                  : e['id'].toString(),
+              key: key.toString(),
+              enabled: e['enabled'] as bool? ?? true,
+              label: e['label']?.toString(),
+              createdAt: e['createdAt'] == null
+                  ? null
+                  : DateTime.tryParse(e['createdAt'].toString()),
+            );
+          }).toList() ??
           const [],
       model: optionalString('model'),
       reasoningEffort: AiReasoningEffort.fromCode(

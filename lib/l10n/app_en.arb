@@ -925,5 +925,13 @@
   "searchEngineUrlTemplate": "URL Template",
   "searchEngineUrlRequired": "Please enter a URL template",
   "searchEngineUrlInvalid": "URL must contain a search query placeholder and use http/https",
-  "searchEngineAdded": "Search engine added"
+  "searchEngineAdded": "Search engine added",
+  "aiChatOptionDefault": "Default",
+  "aiChatServiceTier": "Service tier",
+  "aiChatPriority": "Priority",
+  "aiCitationUnavailable": "This citation is unavailable in this conversation.",
+  "aiCitationBookUnavailable": "The cited book has been deleted or its file is unavailable.",
+  "aiCitationFileChanged": "The book file has changed. This citation can no longer be located reliably.",
+  "aiCitationWait": "Stop generation before opening a citation.",
+  "aiCitationOpenFailed": "Unable to open the cited location."
 }

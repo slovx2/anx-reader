@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
-import 'package:anx_reader/l10n/generated/L10n.dart';
-import 'package:anx_reader/main.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_key_rotator.dart';
@@ -15,14 +13,15 @@ import 'package:anx_reader/utils/log/common.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:langchain_core/chat_models.dart';
 import 'package:langchain_core/prompts.dart';
+import 'chat_session.dart';
 
-final CancelableLangchainRunner _runner = CancelableLangchainRunner();
+final Map<AiChatSession, CancelableLangchainRunner> _activeRuns = {};
 
 // Global request timestamps list for RPM throttling
 final List<DateTime> _aiRequestTimestamps = [];
 
 /// Throttle AI requests if RPM limit is configured (sliding 1-minute window).
-Future<void> _throttleIfNeeded() async {
+Future<void> _throttleIfNeeded(AiChatSession session) async {
   final rpm = Prefs().aiRpm;
   if (rpm <= 0) return;
   final now = DateTime.now();
@@ -33,7 +32,9 @@ Future<void> _throttleIfNeeded() async {
     final waitUntil = oldest.add(const Duration(minutes: 1));
     final waitDuration = waitUntil.difference(DateTime.now());
     if (waitDuration > Duration.zero) {
-      await Future.delayed(waitDuration);
+      await Future.any(
+          [Future<void>.delayed(waitDuration), session.whenCancelled]);
+      if (session.status == AiRunStatus.cancelled) return;
     }
     final newNow = DateTime.now();
     _aiRequestTimestamps.removeWhere(
@@ -49,193 +50,152 @@ Stream<String> aiGenerateStream(
   bool regenerate = false,
   bool useAgent = false,
   WidgetRef? ref,
+  AiChatSession? session,
 }) {
   if (useAgent) {
     assert(ref != null, 'ref must be provided when useAgent is true');
   }
-  LangchainAiRegistry registry = LangchainAiRegistry(ref);
+  final registry = LangchainAiRegistry(ref, session: session);
+  final runner = CancelableLangchainRunner();
 
-  return _generateStream(
+  return _runGeneration(
       messages: messages,
       identifier: identifier,
       overrideConfig: config,
       regenerate: regenerate,
       useAgent: useAgent,
-      registry: registry);
+      registry: registry,
+      runner: runner);
 }
 
-void cancelActiveAiRequest() {
-  _runner.cancel();
+Stream<AiChatEvent> aiChatEvents(
+  List<ChatMessage> messages, {
+  required WidgetRef ref,
+  required AiChatSession session,
+}) async* {
+  session.status = AiRunStatus.running;
+  var latestContent = '';
+  await for (final content in aiGenerateStream(messages,
+      useAgent: true, ref: ref, session: session)) {
+    latestContent = content;
+    yield AiChatEvent(content, session);
+  }
+  if (session.status == AiRunStatus.running) {
+    session.status = AiRunStatus.completed;
+  }
+  yield AiChatEvent(latestContent, session);
 }
 
-Stream<String> _generateStream({
+void cancelActiveAiRequest({AiChatSession? session}) {
+  final target = session ?? _activeRuns.keys.lastOrNull;
+  if (target == null) return;
+  target.cancel();
+  _activeRuns[target]?.cancel();
+}
+
+Stream<String> _runGeneration({
   required List<ChatMessage> messages,
   String? identifier,
   Map<String, String>? overrideConfig,
   required bool regenerate,
   required bool useAgent,
   required LangchainAiRegistry registry,
+  required CancelableLangchainRunner runner,
 }) async* {
-  AnxLog.info('aiGenerateStream called identifier: $identifier');
-  final sanitizedMessages = _sanitizeMessagesForPrompt(messages);
-
-  LangchainAiConfig config;
-
-  // Try to use new provider system first if ref is available
-  if (registry.ref != null && overrideConfig == null) {
-    try {
-      final notifier = registry.ref!.read(aiProvidersProvider.notifier);
-      // If a specific provider id was passed, use it; otherwise use the default
-      final AiProvider? provider = identifier != null
-          ? notifier.getProviderById(identifier)
-          : notifier.getSelectedProvider();
-      if (provider != null &&
-          provider.enabled &&
-          AiKeyRotator.hasValidKey(provider)) {
-        final apiKey = AiKeyRotator.getNextKey(provider);
-        if (apiKey != null) {
-          config = LangchainAiConfig.fromProvider(
-            providerId: provider.id,
-            model: provider.model,
-            apiKey: apiKey,
-            url: provider.url,
-            reasoningEffort: provider.reasoningEffort,
-          );
-
-          AnxLog.info(
-              'aiGenerateStream (new): ${provider.id}, model: ${config.model}, baseUrl: ${config.baseUrl}');
-
-          final pipeline = registry.resolveByProtocol(provider.protocol, config,
-              useAgent: useAgent);
-          final model = pipeline.model;
-
-          await _throttleIfNeeded();
-          yield* _executeStream(
-            model: model,
-            pipeline: pipeline,
-            sanitizedMessages: sanitizedMessages,
-            useAgent: useAgent,
-          );
-
-          // Advance key index for round-robin rotation after successful call
-          registry.ref!
-              .read(aiProvidersProvider.notifier)
-              .advanceKeyIndex(provider.id);
-          return;
-        }
-      }
-    } catch (e) {
-      AnxLog.warning(
-          'Failed to use new provider system, falling back to legacy: $e');
-    }
-  }
-
-  // Try new provider system without ref (reads directly from Prefs storage)
-  if (overrideConfig == null) {
-    try {
-      final rawProviders = Prefs().getAiProviders();
-      if (rawProviders.isNotEmpty) {
-        final providers = rawProviders
+  final session = registry.session;
+  _activeRuns[session] = runner;
+  try {
+    if (session.status == AiRunStatus.cancelled) return;
+    final sanitizedMessages = _sanitizeMessagesForPrompt(messages);
+    final notifier = registry.ref?.read(aiProvidersProvider.notifier);
+    AiProvider? provider;
+    if (overrideConfig == null) {
+      if (notifier != null) {
+        provider = identifier == null
+            ? notifier.getSelectedProvider()
+            : notifier.getProviderById(identifier);
+      } else {
+        final providers = Prefs()
+            .getAiProviders()
             .map((json) => AiProvider.fromJson(json as Map<String, dynamic>))
             .toList();
-
-        AiProvider? provider;
-        if (identifier != null) {
-          try {
-            provider = providers.firstWhere((p) => p.id == identifier);
-          } catch (_) {
-            provider = null;
-          }
-        } else {
-          final selectedId = Prefs().selectedAiService;
-          try {
-            provider = providers.firstWhere((p) => p.id == selectedId);
-          } catch (_) {}
+        final selectedId = identifier ?? Prefs().selectedAiService;
+        provider = providers.where((p) => p.id == selectedId).firstOrNull;
+        if (identifier == null) {
           provider ??= providers.where((p) => p.enabled).firstOrNull;
         }
-
-        if (provider != null &&
-            provider.enabled &&
-            AiKeyRotator.hasValidKey(provider)) {
-          final apiKey = AiKeyRotator.getNextKey(provider);
-          if (apiKey != null) {
-            config = LangchainAiConfig.fromProvider(
-              providerId: provider.id,
-              model: provider.model,
-              apiKey: apiKey,
-              url: provider.url,
-              reasoningEffort: provider.reasoningEffort,
-            );
-
-            AnxLog.info(
-                'aiGenerateStream (no-ref new): ${provider.id}, model: ${config.model}, baseUrl: ${config.baseUrl}');
-
-            final pipeline = registry.resolveByProtocol(
-                provider.protocol, config,
-                useAgent: useAgent);
-            final model = pipeline.model;
-
-            await _throttleIfNeeded();
-            yield* _executeStream(
-              model: model,
-              pipeline: pipeline,
-              sanitizedMessages: sanitizedMessages,
-              useAgent: useAgent,
-            );
-
-            // Advance key index in persistent storage for round-robin rotation
-            final updatedProviders = providers.map((p) {
-              if (p.id == provider!.id) {
-                return p.copyWith(
-                    keyIndex: p.keyIndex + 1, updatedAt: DateTime.now());
-              }
-              return p;
-            }).toList();
-            Prefs().saveAiProviders(updatedProviders);
-            return;
-          }
-        }
       }
-    } catch (e) {
-      AnxLog.warning(
-          'Failed to use no-ref new provider system, falling back to legacy: $e');
     }
-  }
-
-  // Fall back to legacy system
-  final selectedIdentifier = identifier ?? Prefs().selectedAiService;
-  final savedConfig = Prefs().getAiConfig(selectedIdentifier);
-  if (savedConfig.isEmpty &&
-      (overrideConfig == null || overrideConfig.isEmpty)) {
-    final context = navigatorKey.currentContext;
-    if (context != null) {
-      yield L10n.of(context).aiServiceNotConfigured;
+    late final LangchainPipeline pipeline;
+    if (provider != null) {
+      if (!provider.enabled || !AiKeyRotator.hasValidKey(provider)) {
+        throw StateError('AI provider has no enabled API key');
+      }
+      final config = LangchainAiConfig.fromProvider(
+        providerId: provider.id,
+        model: provider.model,
+        apiKey: AiKeyRotator.getNextKey(provider)!,
+        url: provider.url,
+        reasoningEffort: provider.reasoningEffort,
+      );
+      session.configure(
+          '${provider.id}|${provider.protocol.code}|${provider.url}|${provider.model}',
+          provider.reasoningEffort);
+      pipeline = registry.resolveByProtocol(provider.protocol, config,
+          useAgent: useAgent);
     } else {
-      yield 'AI service not configured';
+      final selectedIdentifier = identifier ?? Prefs().selectedAiService;
+      final saved = Prefs().getAiConfig(selectedIdentifier);
+      if (saved.isEmpty && (overrideConfig == null || overrideConfig.isEmpty)) {
+        throw StateError('AI service not configured');
+      }
+      var config = LangchainAiConfig.fromPrefs(selectedIdentifier, saved);
+      if (overrideConfig != null && overrideConfig.isNotEmpty) {
+        config = mergeConfigs(config,
+            LangchainAiConfig.fromPrefs(selectedIdentifier, overrideConfig));
+      }
+      session.configure('$selectedIdentifier|${config.baseUrl}|${config.model}',
+          config.reasoningEffort);
+      pipeline = registry.resolve(config, useAgent: useAgent);
     }
-    return;
+    try {
+      await _throttleIfNeeded(session);
+      if (session.status == AiRunStatus.cancelled) return;
+      yield* _executeStream(
+        model: pipeline.model,
+        pipeline: pipeline,
+        sanitizedMessages: sanitizedMessages,
+        useAgent: useAgent,
+        session: session,
+        runner: runner,
+      );
+    } finally {
+      pipeline.model.close();
+    }
+    if (provider != null &&
+        session.status != AiRunStatus.cancelled &&
+        session.status != AiRunStatus.failed) {
+      if (notifier != null) {
+        notifier.advanceKeyIndex(provider.id);
+      } else {
+        final providers = Prefs()
+            .getAiProviders()
+            .map((json) => AiProvider.fromJson(json as Map<String, dynamic>));
+        Prefs().saveAiProviders(providers
+            .map((p) =>
+                p.id == provider!.id ? p.copyWith(keyIndex: p.keyIndex + 1) : p)
+            .toList());
+      }
+    }
+  } catch (error, stack) {
+    if (session.status != AiRunStatus.cancelled) {
+      session.status = AiRunStatus.failed;
+      AnxLog.severe('AI request failed: $error', error, stack);
+      yield _mapError(error);
+    }
+  } finally {
+    _activeRuns.remove(session);
   }
-
-  config = LangchainAiConfig.fromPrefs(selectedIdentifier, savedConfig);
-  if (overrideConfig != null && overrideConfig.isNotEmpty) {
-    final override =
-        LangchainAiConfig.fromPrefs(selectedIdentifier, overrideConfig);
-    config = mergeConfigs(config, override);
-  }
-
-  AnxLog.info(
-      'aiGenerateStream (legacy): $selectedIdentifier, model: ${config.model}, baseUrl: ${config.baseUrl}');
-
-  final pipeline = registry.resolve(config, useAgent: useAgent);
-  final model = pipeline.model;
-
-  await _throttleIfNeeded();
-  yield* _executeStream(
-    model: model,
-    pipeline: pipeline,
-    sanitizedMessages: sanitizedMessages,
-    useAgent: useAgent,
-  );
 }
 
 /// Execute the AI stream with the given model and pipeline
@@ -244,6 +204,8 @@ Stream<String> _executeStream({
   required LangchainPipeline pipeline,
   required List<ChatMessage> sanitizedMessages,
   required bool useAgent,
+  required AiChatSession session,
+  required CancelableLangchainRunner runner,
 }) async* {
   Stream<String> stream;
   if (useAgent) {
@@ -254,25 +216,22 @@ Stream<String> _executeStream({
     }
 
     final tools = pipeline.tools;
-    if (tools.isEmpty) {
-      yield 'Agent mode not supported for this provider.';
-      return;
-    }
 
     final historyMessages = sanitizedMessages
         .sublist(0, sanitizedMessages.length - 1)
         .toList(growable: false);
 
-    stream = _runner.streamAgent(
+    stream = runner.streamAgent(
       model: model,
       tools: tools,
       history: historyMessages,
       input: inputMessage,
       systemMessage: pipeline.systemMessage,
+      session: session,
     );
   } else {
     final prompt = PromptValue.chat(sanitizedMessages);
-    stream = _runner.stream(model: model, prompt: prompt);
+    stream = runner.stream(model: model, prompt: prompt, session: session);
   }
 
   var buffer = '';
@@ -283,9 +242,11 @@ Stream<String> _executeStream({
       yield buffer;
     }
   } catch (error, stack) {
+    if (session.status == AiRunStatus.cancelled) return;
+    session.status = AiRunStatus.failed;
     final mapped = _mapError(error);
     AnxLog.severe('AI error: $mapped\n$stack');
-    yield mapped;
+    yield buffer.isEmpty ? mapped : '$buffer\n\n$mapped';
   } finally {
     try {
       model.close();

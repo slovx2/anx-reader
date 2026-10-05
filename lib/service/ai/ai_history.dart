@@ -14,6 +14,7 @@ class AiChatHistoryEntry {
     required this.updatedAt,
     required this.messages,
     required this.completed,
+    this.sessionData = const {},
   });
 
   final String id;
@@ -23,21 +24,25 @@ class AiChatHistoryEntry {
   final int updatedAt;
   final List<ChatMessage> messages;
   final bool completed;
+  final Map<String, dynamic> sessionData;
 
   AiChatHistoryEntry copyWith({
     List<ChatMessage>? messages,
     int? updatedAt,
     bool? completed,
     String? model,
+    String? serviceId,
+    Map<String, dynamic>? sessionData,
   }) {
     return AiChatHistoryEntry(
       id: id,
-      serviceId: serviceId,
+      serviceId: serviceId ?? this.serviceId,
       model: model ?? this.model,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       messages: messages ?? this.messages,
       completed: completed ?? this.completed,
+      sessionData: sessionData ?? this.sessionData,
     );
   }
 
@@ -49,6 +54,7 @@ class AiChatHistoryEntry {
       'createdAt': createdAt,
       'updatedAt': updatedAt,
       'completed': completed,
+      'session': sessionData,
       'messages': messages.map((m) => m.toMap()).toList(growable: false),
     };
   }
@@ -80,14 +86,28 @@ class AiChatHistoryEntry {
           : DateTime.now().millisecondsSinceEpoch,
       completed: json['completed'] == true,
       messages: messages,
+      sessionData: json['session'] is Map
+          ? Map<String, dynamic>.from(json['session'] as Map)
+          : const {},
     );
   }
 }
 
 class AiHistoryStore {
+  // 将读写排队，避免停止旧会话和保存新会话时互相覆盖 JSON 文件。
+  static Future<void> _pending = Future<void>.value();
+
+  static Future<T> _serialized<T>(Future<T> Function() operation) {
+    final result = _pending.then((_) => operation());
+    _pending = result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return result;
+  }
+
+  static Future<List<AiChatHistoryEntry>> readHistory() =>
+      _serialized(_readHistory);
   static const String historyFileName = 'ai_history.json';
 
-  static Future<List<AiChatHistoryEntry>> readHistory() async {
+  static Future<List<AiChatHistoryEntry>> _readHistory() async {
     final file = await _resolveFile();
     if (!await file.exists()) {
       return <AiChatHistoryEntry>[];
@@ -113,44 +133,46 @@ class AiHistoryStore {
     return <AiChatHistoryEntry>[];
   }
 
-  static Future<void> upsertEntry(AiChatHistoryEntry entry) async {
-    final file = await _resolveFile();
-    final history = List<AiChatHistoryEntry>.from(await readHistory());
-    final existingIndex =
-        history.indexWhere((element) => element.id == entry.id);
+  static Future<void> upsertEntry(AiChatHistoryEntry entry) =>
+      _serialized(() async {
+        final file = await _resolveFile();
+        final history = List<AiChatHistoryEntry>.from(await _readHistory());
+        final existingIndex =
+            history.indexWhere((element) => element.id == entry.id);
 
-    if (existingIndex >= 0) {
-      history[existingIndex] = entry;
-    } else {
-      history.add(entry);
-    }
+        if (existingIndex >= 0) {
+          history[existingIndex] = entry;
+        } else {
+          history.add(entry);
+        }
 
-    history.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    final maxCount = Prefs().maxAiCacheCount;
-    final limit = maxCount <= 0 ? history.length : maxCount;
-    final limited = history.take(limit).toList(growable: false);
+        history.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+        final maxCount = Prefs().maxAiCacheCount;
+        final limit = maxCount <= 0 ? history.length : maxCount;
+        final limited = history.take(limit).toList(growable: false);
 
-    await file.writeAsString(
-      json.encode(limited.map((e) => e.toJson()).toList(growable: false)),
-    );
-  }
+        await file.writeAsString(
+          json.encode(limited.map((e) => e.toJson()).toList(growable: false)),
+        );
+      });
 
-  static Future<void> removeEntry(String id) async {
-    final file = await _resolveFile();
-    final history = List<AiChatHistoryEntry>.from(await readHistory());
-    final filtered =
-        history.where((element) => element.id != id).toList(growable: false);
-    await file.writeAsString(
-      json.encode(filtered.map((e) => e.toJson()).toList(growable: false)),
-    );
-  }
+  static Future<void> removeEntry(String id) => _serialized(() async {
+        final file = await _resolveFile();
+        final history = List<AiChatHistoryEntry>.from(await _readHistory());
+        final filtered = history
+            .where((element) => element.id != id)
+            .toList(growable: false);
+        await file.writeAsString(
+          json.encode(filtered.map((e) => e.toJson()).toList(growable: false)),
+        );
+      });
 
-  static Future<void> clear() async {
-    final file = await _resolveFile();
-    if (await file.exists()) {
-      await file.delete();
-    }
-  }
+  static Future<void> clear() => _serialized(() async {
+        final file = await _resolveFile();
+        if (await file.exists()) {
+          await file.delete();
+        }
+      });
 
   static Future<File> _resolveFile() async {
     final cacheDir = await getAnxCacheDir();

@@ -49,12 +49,14 @@ class ReadingPage extends ConsumerStatefulWidget {
     this.cfi,
     required this.initialThemes,
     this.heroTag,
+    this.readerReady,
   });
 
   final Book book;
   final String? cfi;
   final List<ReadTheme> initialThemes;
   final String? heroTag;
+  final Completer<void>? readerReady;
 
   @override
   ConsumerState<ReadingPage> createState() => ReadingPageState();
@@ -449,6 +451,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   }
 
   Future<void> onLoadEnd() async {
+    if (widget.readerReady != null) {
+      if (!widget.readerReady!.isCompleted) widget.readerReady!.complete();
+      return;
+    }
     if (Prefs().autoSummaryPreviousContent) {
       final delayLevel = Prefs().autoSummaryDelayLevel;
       final now = DateTime.now();
@@ -459,12 +465,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           bool shouldTrigger;
           switch (delayLevel) {
             case 1: // 30 minutes
-              shouldTrigger =
-                  now.difference(lastTimestamp).inMinutes >= 30;
+              shouldTrigger = now.difference(lastTimestamp).inMinutes >= 30;
               break;
             case 2: // 3 hours
-              shouldTrigger =
-                  now.difference(lastTimestamp).inHours >= 3;
+              shouldTrigger = now.difference(lastTimestamp).inHours >= 3;
               break;
             case 3: // Next day (cross midnight)
               shouldTrigger = now.year != lastTimestamp.year ||
@@ -472,12 +476,10 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   now.day != lastTimestamp.day;
               break;
             case 4: // 3 days
-              shouldTrigger =
-                  now.difference(lastTimestamp).inDays >= 3;
+              shouldTrigger = now.difference(lastTimestamp).inDays >= 3;
               break;
             case 5: // 1 week
-              shouldTrigger =
-                  now.difference(lastTimestamp).inDays >= 7;
+              shouldTrigger = now.difference(lastTimestamp).inDays >= 7;
               break;
             default:
               shouldTrigger = true;

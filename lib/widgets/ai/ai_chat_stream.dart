@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'package:anx_reader/service/ai/citation_navigation.dart';
+
+import 'package:anx_reader/widgets/ai/chat_scroll_controller.dart';
+import 'package:anx_reader/enums/ai_reasoning_effort.dart';
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/enums/hint_key.dart';
@@ -55,8 +59,10 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   Stream<List<ChatMessage>>? _messageStream;
   StreamController<List<ChatMessage>>? _messageController;
   StreamSubscription<List<ChatMessage>>? _messageSubscription;
-  final ScrollController _scrollController = ScrollController();
+  final ChatScrollController _scrollController = ChatScrollController();
   bool _isStreaming = false;
+  late final AiChat _chatNotifier;
+  bool get _isBusy => _isStreaming || _chatNotifier.isRunning;
   late List<String> _suggestedPrompts;
   late List<String> _starterPrompts;
   double _fontSize = 14.0;
@@ -89,6 +95,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   @override
   void initState() {
     super.initState();
+    _chatNotifier = ref.read(aiChatProvider.notifier);
     _starterPrompts = [
       L10n.of(navigatorKey.currentContext!).quickPrompt1,
       L10n.of(navigatorKey.currentContext!).quickPrompt2,
@@ -114,6 +121,9 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
 
   @override
   void dispose() {
+    if (_isStreaming) {
+      cancelActiveAiRequest(session: _chatNotifier.session);
+    }
     inputController.dispose();
     _messageSubscription?.cancel();
     _messageController?.close();
@@ -142,8 +152,13 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   void _onProviderSelected(String providerId) {
-    if (_isStreaming) return;
+    if (_isBusy) return;
     ref.read(aiProvidersProvider.notifier).setSelectedProvider(providerId);
+    final provider =
+        ref.read(aiProvidersProvider.notifier).getProviderById(providerId);
+    if (provider != null) {
+      ref.read(aiChatProvider.notifier).setOptions(provider);
+    }
   }
 
   AiProvider? _providerById(List<AiProvider> providers, String id) {
@@ -158,16 +173,8 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     return prompts.take(3).toList(growable: false);
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+  void _scrollToBottom({bool reset = false}) {
+    _scrollController.followToBottom(reset: reset);
   }
 
   Widget _buildHistoryDrawer(BuildContext context) {
@@ -316,8 +323,8 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     BuildContext context,
     AiChatHistoryEntry entry,
   ) async {
-    if (_isStreaming) {
-      _cancelStreaming();
+    if (_isBusy) {
+      await _cancelStreaming();
     }
     _messageSubscription?.cancel();
     _messageSubscription = null;
@@ -327,21 +334,28 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     }
     _messageController = null;
 
-    ref.read(aiChatProvider.notifier).loadHistoryEntry(entry);
+    final latestEntry =
+        ref.read(aiHistoryProvider.notifier).findById(entry.id) ?? entry;
+    ref.read(aiChatProvider.notifier).loadHistoryEntry(latestEntry);
 
     setState(() {
       _messageStream = null;
       // reset state when switching service
     });
 
+    if (!context.mounted) return;
     Navigator.of(context).pop();
-    _scrollToBottom();
+    _scrollToBottom(reset: true);
   }
 
   Future<void> _confirmDeleteHistory(
     BuildContext context,
     AiChatHistoryEntry entry,
   ) async {
+    if (_isBusy && _chatNotifier.currentSessionId == entry.id) {
+      await _cancelStreaming();
+    }
+    if (!mounted) return;
     await ref.read(aiHistoryProvider.notifier).remove(entry.id);
 
     final currentSessionId = ref.read(aiChatProvider.notifier).currentSessionId;
@@ -355,6 +369,8 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   Future<void> _confirmClearHistory(BuildContext context) async {
+    if (_isBusy) await _cancelStreaming();
+    if (!mounted) return;
     await ref.read(aiHistoryProvider.notifier).clear();
     ref.read(aiChatProvider.notifier).clear();
     setState(() {
@@ -363,13 +379,14 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   void _sendMessage({bool isRegenerate = false}) {
-    if (_isStreaming) {
+    if (_isBusy) {
       return;
     }
 
     if (inputController.text.trim().isEmpty) return;
     final message = inputController.text.trim();
     inputController.clear();
+    _scrollToBottom(reset: true);
 
     _messageSubscription?.cancel();
     _messageController?.close();
@@ -419,8 +436,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
 
   void _useQuickPrompt(String prompt, {bool sendImmediately = false}) {
     final existing = inputController.text.trim();
-    inputController.text =
-        existing.isEmpty ? prompt : '$prompt $existing';
+    inputController.text = existing.isEmpty ? prompt : '$prompt $existing';
     inputController.selection = TextSelection.collapsed(
       offset: inputController.text.length,
     );
@@ -430,7 +446,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   void _clearMessage() {
-    if (_isStreaming) {
+    if (_isBusy) {
       return;
     }
     _messageSubscription?.cancel();
@@ -445,7 +461,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   void _regenerateLastMessage() {
-    if (_isStreaming) {
+    if (_isBusy) {
       return;
     }
     final messages = ref.read(aiChatProvider).value;
@@ -474,17 +490,106 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     AnxToast.show(L10n.of(context).notesPageCopied);
   }
 
-  void _cancelStreaming() {
-    if (!_isStreaming) return;
-    cancelActiveAiRequest();
-    _messageSubscription?.cancel();
+  Future<void> _cancelStreaming() async {
+    if (!_isBusy) return;
+    await _chatNotifier.stop();
+    final subscription = _messageSubscription;
     _messageSubscription = null;
-    _messageController?.close();
+    await subscription?.cancel();
+    await _messageController?.close();
     _messageController = null;
+    if (!mounted) return;
     setState(() {
       _isStreaming = false;
       _messageStream = null;
     });
+  }
+
+  Future<void> _showChatOptions(AiProvider provider) async {
+    final notifier = ref.read(aiChatProvider.notifier);
+    notifier.configure(provider);
+    final l10n = L10n.of(context);
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            ListTile(
+              leading: const Icon(Icons.smart_toy_outlined),
+              title: Text(l10n.aiModelSwitchTitle),
+              subtitle: Text(_modelLabel(provider)),
+              onTap: () => Navigator.pop(context, 'model'),
+            ),
+            if (provider.protocol.isOpenAi) ...[
+              const Divider(),
+              ListTile(title: Text(l10n.settingsAiProviderReasoningEffort)),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: SegmentedButton<AiReasoningEffort>(
+                  showSelectedIcon: false,
+                  selected: {notifier.session.reasoning},
+                  segments: [
+                    for (final effort in AiReasoningEffort.values)
+                      ButtonSegment(
+                          value: effort,
+                          label: Text(switch (effort) {
+                            AiReasoningEffort.auto => l10n.aiChatOptionDefault,
+                            AiReasoningEffort.low =>
+                              l10n.settingsAiProviderReasoningEffortLow,
+                            AiReasoningEffort.medium =>
+                              l10n.settingsAiProviderReasoningEffortMedium,
+                            AiReasoningEffort.high =>
+                              l10n.settingsAiProviderReasoningEffortHigh,
+                          })),
+                  ],
+                  onSelectionChanged: (values) =>
+                      Navigator.pop(context, 'reasoning:${values.first.code}'),
+                ),
+              ),
+              const Divider(),
+              ListTile(title: Text(l10n.aiChatServiceTier)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  selected: {notifier.session.priority},
+                  segments: [
+                    ButtonSegment(
+                        value: false, label: Text(l10n.aiChatOptionDefault)),
+                    ButtonSegment(
+                        value: true, label: Text(l10n.aiChatPriority)),
+                  ],
+                  onSelectionChanged: (values) => Navigator.pop(
+                      context, values.first ? 'priority' : 'default'),
+                ),
+              ),
+            ],
+          ]),
+        ),
+      ),
+    );
+    if (!mounted || _isBusy || choice == null) return;
+    if (choice == 'model') {
+      final selected = await showModelPickerDialog(
+        context: context,
+        provider: provider,
+        currentModel: provider.model,
+      );
+      if (!mounted ||
+          _isBusy ||
+          selected == null ||
+          selected == provider.model) {
+        return;
+      }
+      final updated = provider.copyWith(model: selected);
+      ref.read(aiProvidersProvider.notifier).updateProvider(updated);
+      await notifier.setOptions(updated);
+    } else if (choice.startsWith('reasoning:')) {
+      await notifier.setOptions(provider,
+          reasoning: AiReasoningEffort.fromCode(choice.split(':').last));
+    } else {
+      await notifier.setOptions(provider, priority: choice == 'priority');
+    }
   }
 
   void _showFontSizeMenu(BuildContext context) {
@@ -569,7 +674,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     final selectedId = Prefs().selectedAiService;
 
     var aiService = PopupMenuButton<String>(
-      enabled: !_isStreaming,
+      enabled: !_isBusy,
       onSelected: _onProviderSelected,
       itemBuilder: (context) {
         return enabledProviders.map((provider) {
@@ -676,28 +781,16 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
                           padding: EdgeInsets.zero,
                           constraints: const BoxConstraints(),
                           visualDensity: VisualDensity.compact,
-                          onPressed: () async {
-                            final selected = await showModelPickerDialog(
-                              context: context,
-                              provider: currentProvider,
-                              currentModel: currentProvider.model,
-                            );
-                            if (selected != null &&
-                                selected != currentProvider.model) {
-                              ref
-                                  .read(aiProvidersProvider.notifier)
-                                  .updateProvider(
-                                    currentProvider.copyWith(model: selected),
-                                  );
-                            }
-                          },
+                          onPressed: _isBusy
+                              ? null
+                              : () => _showChatOptions(currentProvider),
                         ),
                     ],
                   ),
                 ),
                 IconButton(
-                  icon: Icon(_isStreaming ? Icons.stop : Icons.send, size: 18),
-                  onPressed: _isStreaming ? _cancelStreaming : _sendMessage,
+                  icon: Icon(_isBusy ? Icons.stop : Icons.send, size: 18),
+                  onPressed: _isBusy ? _cancelStreaming : _sendMessage,
                 ),
               ],
             ),
@@ -912,15 +1005,17 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   }
 
   Widget _buildMessageList(List<ChatMessage> messages) {
-    return ListView.builder(
-      controller: _scrollController,
-      itemCount: messages.length,
-      itemBuilder: (context, index) {
-        final message = messages[index];
-        final isStreaming =
-            _messageStream != null && index == messages.length - 1;
-        return _buildMessageItem(message, index, isStreaming);
-      },
+    return NotificationListener<ScrollNotification>(
+      onNotification: _scrollController.handleNotification,
+      child: ListView.builder(
+        controller: _scrollController,
+        itemCount: messages.length,
+        itemBuilder: (context, index) {
+          final message = messages[index];
+          final isStreaming = _isBusy && index == messages.length - 1;
+          return _buildMessageItem(message, index, isStreaming);
+        },
+      ),
     );
   }
 
@@ -1088,6 +1183,12 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
             widgets.add(
               StyledMarkdown(
                 data: entry.text!,
+                onLinkTap: (href) {
+                  if (Uri.tryParse(href)?.scheme != 'anx') return false;
+                  unawaited(openAiCitation(context, ref,
+                      ref.read(aiChatProvider.notifier).session, href));
+                  return true;
+                },
                 selectable: true,
                 fontSize: fontSize,
               ),
