@@ -54,8 +54,8 @@ jobs:
           BUILD_SHA: ${{ github.sha }}
         run: |
           APP="build/macos/Build/Products/Release/Anx Reader.app"
-          # 为本机验收进行临时签名，保留应用的沙盒权限。
-          codesign --force --deep --sign - --entitlements macos/Runner/Release.entitlements "$APP"
+          # 验收包沿用现有非商店包的数据目录；不引入商店版沙盒迁移。
+          codesign --force --deep --sign - "$APP"
           codesign --verify --deep --strict "$APP"
           mkdir -p build/macos-artifact
           ditto -c -k --keepParent "$APP" build/macos-artifact/AnxReader-macos.zip
