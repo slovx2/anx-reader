@@ -33,7 +33,7 @@ jobs:
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
-          java-version: '17.0.20.1+1'
+          java-version: '17.0.17+10'
 
       - name: Set up Flutter
         uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
