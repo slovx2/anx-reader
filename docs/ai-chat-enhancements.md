@@ -87,3 +87,12 @@ ANX_LIVE_CONFIG=/private/path/provider.json flutter test --no-pub test/service/a
 仍未做真实 Claude/Gemini 调用、真实 encrypted reasoning 回传和所有文件失效场景的桌面验收。凭据或上游行为相关限制见真实端点记录，不用 mock 结果代替。
 
 测试结束已定向移除两本合成书、对应阅读记录和三个测试会话，保留两条原有个人会话，恢复原来的自适应聊天显示模式。Provider 地址、密钥、协议和模型未改动；正常请求更新的密钥轮转索引及更新时间保留。截图及运行日志位于备份目录的 `e2e-evidence` 子目录，未提交含本机数据的日志。
+
+## Android 与 fork Release（2026-10-08）
+
+- [Android APK 构建与完整检查](https://github.com/slovx2/anx-reader/actions/runs/37650059090)通过。Ubuntu 24.04 构建 APK，macOS 15 执行完整测试，避免在项目未适配的 Linux 桌面环境运行 Widget。41 项离线测试通过，4 项真实接口测试默认跳过；静态检查没有 error。
+- 新增手动工作流 `build-android-manual.yaml`，固定 Flutter、Java 17.0.17+10 和 Actions 版本，支持指定源码提交。产物包括 universal、arm64-v8a、armeabi-v7a、x86_64 四种 APK。
+- APK 使用 fork 的固定发布密钥，四个产物均经 `apksigner` 验签，证书 SHA256 与保存的发布密钥一致；下载后核对 SHA256、ZIP 完整性及对应原生架构。尚未做 Android 真机安装验收。
+- DMG 使用前述已验收的 macOS 应用生成，未重新编译；镜像校验、挂载、应用签名与双架构检查通过。
+- 两端功能源码均为 `801c4de6d90a6d3e7901461a2569601780ae3d4a`；[fork Release](https://github.com/slovx2/anx-reader/releases/tag/fork-v1.15.0-chat.1)提供 APK、DMG、SHA256SUMS 和 BUILDINFO。
+- 固定 Android 密钥在本机 `~/.config/anx-reader-release` 和 fork 的 Actions Secrets 中保存，不进入仓库。与官方 APK 签名不同，不能直接覆盖官方安装；后续 fork 构建沿用同一密钥。
