@@ -1,0 +1,100 @@
+name: Build Android (Fork Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact source commit to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-fork-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - name: Read Flutter version
+        id: flutter
+        run: echo "version=$(tr -d '[:space:]' < .github/flutter-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        with:
+          distribution: temurin
+          java-version: '17.0.20.1+1'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          channel: stable
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          cache: true
+
+      - name: Generate and validate
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+          flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
+          flutter test --no-pub --reporter expanded
+
+      - name: Configure fork signing
+        env:
+          SIGNING_KEY: ${{ secrets.FORK_ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.FORK_ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.FORK_ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.FORK_ANDROID_KEY_ALIAS }}
+        run: |
+          umask 077
+          test -n "$SIGNING_KEY"
+          printf '%s' "$SIGNING_KEY" | base64 --decode > android/app/fork-release.jks
+          {
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'storeFile=fork-release.jks\n'
+          } > android/key.properties
+
+      - name: Build APKs
+        run: |
+          flutter build apk --release --no-pub
+          flutter build apk --release --split-per-abi --no-pub
+
+      - name: Verify and package APKs
+        run: |
+          mkdir -p build/android-artifact
+          VERSION=$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          for ABI in universal armeabi-v7a arm64-v8a x86_64; do
+            SOURCE="build/app/outputs/flutter-apk/app-$ABI-release.apk"
+            if [ "$ABI" = universal ]; then SOURCE="build/app/outputs/flutter-apk/app-release.apk"; fi
+            "$APKSIGNER" verify --verbose --print-certs "$SOURCE"
+            cp "$SOURCE" "build/android-artifact/Anx-Reader-android-$VERSION-fork-$ABI.apk"
+          done
+          git rev-parse HEAD > build/android-artifact/commit.txt
+          cd build/android-artifact
+          sha256sum *.apk > SHA256SUMS
+
+      - name: Remove temporary signing files
+        if: always()
+        run: rm -f android/key.properties android/app/fork-release.jks
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-fork-${{ inputs.source_ref }}
+          path: build/android-artifact/
+          if-no-files-found: error
+          retention-days: 14
