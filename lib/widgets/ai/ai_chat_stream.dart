@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:anx_reader/service/ai/citation_navigation.dart';
 
 import 'package:anx_reader/widgets/ai/chat_scroll_controller.dart';
