@@ -19,7 +19,7 @@ class ChapterContentRepository {
   }
 
   Future<String> fetchCurrent(
-    WidgetRef ref, {
+    ProviderContainer ref, {
     int? maxCharacters,
   }) async {
     final readingState = ref.read(currentReadingProvider);
@@ -38,7 +38,7 @@ class ChapterContentRepository {
   }
 
   Future<String> fetchByHref(
-    WidgetRef ref, {
+    ProviderContainer ref, {
     required String href,
     int? maxCharacters,
   }) async {

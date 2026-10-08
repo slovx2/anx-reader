@@ -49,7 +49,7 @@ Stream<String> aiGenerateStream(
   Map<String, String>? config,
   bool regenerate = false,
   bool useAgent = false,
-  WidgetRef? ref,
+  ProviderContainer? ref,
   AiChatSession? session,
 }) {
   if (useAgent) {
@@ -70,7 +70,7 @@ Stream<String> aiGenerateStream(
 
 Stream<AiChatEvent> aiChatEvents(
   List<ChatMessage> messages, {
-  required WidgetRef ref,
+  required ProviderContainer ref,
   required AiChatSession session,
 }) async* {
   session.status = AiRunStatus.running;
@@ -86,11 +86,9 @@ Stream<AiChatEvent> aiChatEvents(
   yield AiChatEvent(latestContent, session);
 }
 
-void cancelActiveAiRequest({AiChatSession? session}) {
-  final target = session ?? _activeRuns.keys.lastOrNull;
-  if (target == null) return;
-  target.cancel();
-  _activeRuns[target]?.cancel();
+void cancelActiveAiRequest(AiChatSession session) {
+  session.cancel();
+  _activeRuns[session]?.cancel();
 }
 
 Stream<String> _runGeneration({

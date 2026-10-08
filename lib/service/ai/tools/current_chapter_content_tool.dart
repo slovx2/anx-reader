@@ -23,7 +23,7 @@ class CurrentChapterContentTool
           timeout: const Duration(seconds: 4),
         );
 
-  final WidgetRef _ref;
+  final ProviderContainer _ref;
   final ChapterContentRepository _repository;
 
   @override

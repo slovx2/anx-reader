@@ -28,7 +28,7 @@ import 'package:langchain_core/tools.dart';
 class AiToolContext {
   AiToolContext({required this.ref});
 
-  final WidgetRef ref;
+  final ProviderContainer ref;
 
   late final NotesRepository notesRepository = NotesRepository();
   late final BooksRepository booksRepository = BooksRepository();

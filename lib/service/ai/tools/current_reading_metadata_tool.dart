@@ -21,7 +21,7 @@ class CurrentReadingMetadataTool
           timeout: const Duration(seconds: 2),
         );
 
-  final WidgetRef _ref;
+  final ProviderContainer _ref;
 
   @override
   JsonMap parseInput(Map<String, dynamic> json) {

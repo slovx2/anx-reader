@@ -11,6 +11,7 @@ import 'package:anx_reader/models/book.dart';
 import 'package:anx_reader/models/current_reading_state.dart';
 import 'package:anx_reader/page/home_page.dart';
 import 'package:anx_reader/page/iap_page.dart';
+import 'package:anx_reader/providers/ai_chat.dart';
 import 'package:anx_reader/providers/chapter_content_bridge.dart';
 import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/providers/sync.dart';
@@ -481,6 +482,7 @@ Future<void> pushToReadingPage(
   final chapterContentBridge =
       container.read(chapterContentBridgeProvider.notifier);
   final tocSearch = container.read(tocSearchProvider.notifier);
+  final aiChat = container.read(aiChatProvider.notifier);
 
   final closed = _readingPageClosed = Completer<void>();
   await navigator
@@ -501,6 +503,8 @@ Future<void> pushToReadingPage(
     currentReading.finish();
     chapterContentBridge.state = null;
     tocSearch.clear();
+    // 退出阅读页后阅读类工具失效，停止阅读页内发起的 AI 运行。
+    unawaited(aiChat.stopReaderRun());
     AnxLog.info('Pop successfully ReadingPage: ${book.title}');
     if (!closed.isCompleted) closed.complete();
   });

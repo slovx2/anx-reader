@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:anx_reader/service/ai/citation_navigation.dart';
 
 import 'package:anx_reader/widgets/ai/chat_scroll_controller.dart';
@@ -14,7 +13,6 @@ import 'package:anx_reader/providers/ai_history.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_services.dart';
 import 'package:anx_reader/service/ai/ai_history.dart';
-import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/ai_reasoning_parser.dart';
@@ -56,13 +54,9 @@ class AiChatStream extends ConsumerStatefulWidget {
 class AiChatStreamState extends ConsumerState<AiChatStream> {
   final TextEditingController inputController = TextEditingController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  Stream<List<ChatMessage>>? _messageStream;
-  StreamController<List<ChatMessage>>? _messageController;
-  StreamSubscription<List<ChatMessage>>? _messageSubscription;
   final ChatScrollController _scrollController = ChatScrollController();
-  bool _isStreaming = false;
   late final AiChat _chatNotifier;
-  bool get _isBusy => _isStreaming || _chatNotifier.isRunning;
+  bool get _isBusy => _chatNotifier.isRunning;
   late List<String> _suggestedPrompts;
   late List<String> _starterPrompts;
   double _fontSize = 14.0;
@@ -121,12 +115,8 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
 
   @override
   void dispose() {
-    if (_isStreaming) {
-      cancelActiveAiRequest(session: _chatNotifier.session);
-    }
+    // 运行由 aiChatProvider 持有，关闭界面不中断 Agent。
     inputController.dispose();
-    _messageSubscription?.cancel();
-    _messageController?.close();
     _scrollController.dispose();
     super.dispose();
   }
@@ -326,22 +316,10 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     if (_isBusy) {
       await _cancelStreaming();
     }
-    _messageSubscription?.cancel();
-    _messageSubscription = null;
-    final controller = _messageController;
-    if (controller != null && !controller.isClosed) {
-      await controller.close();
-    }
-    _messageController = null;
 
     final latestEntry =
         ref.read(aiHistoryProvider.notifier).findById(entry.id) ?? entry;
     ref.read(aiChatProvider.notifier).loadHistoryEntry(latestEntry);
-
-    setState(() {
-      _messageStream = null;
-      // reset state when switching service
-    });
 
     if (!context.mounted) return;
     Navigator.of(context).pop();
@@ -361,10 +339,6 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     final currentSessionId = ref.read(aiChatProvider.notifier).currentSessionId;
     if (currentSessionId == entry.id) {
       ref.read(aiChatProvider.notifier).clear();
-      setState(() {
-        _messageStream = null;
-        // reset state when conversation changes
-      });
     }
   }
 
@@ -373,12 +347,9 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     if (!mounted) return;
     await ref.read(aiHistoryProvider.notifier).clear();
     ref.read(aiChatProvider.notifier).clear();
-    setState(() {
-      _messageStream = null;
-    });
   }
 
-  void _sendMessage({bool isRegenerate = false}) {
+  void _sendMessage() {
     if (_isBusy) {
       return;
     }
@@ -387,51 +358,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     final message = inputController.text.trim();
     inputController.clear();
     _scrollToBottom(reset: true);
-
-    _messageSubscription?.cancel();
-    _messageController?.close();
-
-    final controller = StreamController<List<ChatMessage>>();
-    final stream = ref.read(aiChatProvider.notifier).sendMessageStream(
-          message,
-          ref,
-          isRegenerate,
-        );
-
-    setState(() {
-      _messageController = controller;
-      _messageStream = controller.stream;
-      _isStreaming = true;
-    });
-
-    _messageSubscription = stream.listen(
-      (event) {
-        controller.add(event);
-        _scrollToBottom();
-      },
-      onError: (error, stack) {
-        controller.addError(error, stack);
-        if (!controller.isClosed) {
-          controller.close();
-        }
-        if (mounted) {
-          setState(() {
-            _isStreaming = false;
-          });
-        }
-      },
-      onDone: () {
-        if (!controller.isClosed) {
-          controller.close();
-        }
-        if (mounted) {
-          setState(() {
-            _isStreaming = false;
-          });
-        }
-      },
-      cancelOnError: false,
-    );
+    _chatNotifier.send(message);
   }
 
   void _useQuickPrompt(String prompt, {bool sendImmediately = false}) {
@@ -449,13 +376,8 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
     if (_isBusy) {
       return;
     }
-    _messageSubscription?.cancel();
-    _messageSubscription = null;
-    _messageController?.close();
-    _messageController = null;
     setState(() {
       ref.read(aiChatProvider.notifier).clear();
-      _messageStream = null;
       _suggestedPrompts = _pickSuggestedPrompts();
     });
   }
@@ -476,7 +398,7 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
         ref.read(aiChatProvider.notifier).restore(history);
         setState(() {
           inputController.text = message.contentAsString;
-          _sendMessage(isRegenerate: true);
+          _sendMessage();
         });
         break;
       }
@@ -493,16 +415,6 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
   Future<void> _cancelStreaming() async {
     if (!_isBusy) return;
     await _chatNotifier.stop();
-    final subscription = _messageSubscription;
-    _messageSubscription = null;
-    await subscription?.cancel();
-    await _messageController?.close();
-    _messageController = null;
-    if (!mounted) return;
-    setState(() {
-      _isStreaming = false;
-      _messageStream = null;
-    });
   }
 
   Future<void> _showChatOptions(AiProvider provider) async {
@@ -667,6 +579,11 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
 
   @override
   Widget build(BuildContext context) {
+    // 运行状态与消息都来自 aiChatProvider，重新打开界面时直接接上后台运行。
+    final chatState = ref.watch(aiChatProvider);
+    ref.listen(aiChatProvider, (_, __) {
+      if (_isBusy) _scrollToBottom();
+    });
     final quickPrompts = _getQuickPrompts(context);
     final allProviders = ref.watch(aiProvidersProvider);
     final enabledProviders = allProviders.where((p) => p.enabled).toList();
@@ -914,35 +831,18 @@ class AiChatStreamState extends ConsumerState<AiChatStream> {
           : Column(
               children: [
                 Expanded(
-                  child: _messageStream != null
-                      ? StreamBuilder<List<ChatMessage>>(
-                          stream: _messageStream,
-                          builder: (context, snapshot) {
-                            if (!snapshot.hasData) {
-                              return Skeletonizer.zone(child: Bone.multiText());
-                            }
+                  child: chatState.when(
+                    data: (messages) {
+                      if (messages.isEmpty) {
+                        return buildEmptyState();
+                      }
 
-                            final messages = snapshot.data!;
-                            if (messages.isEmpty) {
-                              return buildEmptyState();
-                            }
-
-                            return _buildMessageList(messages);
-                          },
-                        )
-                      : ref.watch(aiChatProvider).when(
-                            data: (messages) {
-                              if (messages.isEmpty) {
-                                return buildEmptyState();
-                              }
-
-                              return _buildMessageList(messages);
-                            },
-                            loading: () =>
-                                Skeletonizer.zone(child: Bone.multiText()),
-                            error: (error, stack) =>
-                                Center(child: Text('error: $error')),
-                          ),
+                      return _buildMessageList(messages);
+                    },
+                    loading: () => Skeletonizer.zone(child: Bone.multiText()),
+                    error: (error, stack) =>
+                        Center(child: Text('error: $error')),
+                  ),
                 ),
                 inputBox,
               ],

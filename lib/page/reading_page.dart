@@ -16,12 +16,12 @@ import 'package:anx_reader/models/read_theme.dart';
 import 'package:anx_reader/page/book_detail.dart';
 import 'package:anx_reader/page/book_player/epub_player.dart';
 import 'package:anx_reader/providers/sync.dart';
-import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/utils/env_var.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/ui/status_bar.dart';
 import 'package:anx_reader/widgets/ai/ai_chat_stream.dart';
+import 'package:anx_reader/widgets/ai/ai_run_indicator.dart';
 import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:anx_reader/widgets/reading_page/notes_widget.dart';
 import 'package:anx_reader/models/reading_time.dart';
@@ -78,6 +78,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   bool bottomBarOffstage = true;
   late String heroTag;
   Widget? _aiChat;
+  bool _aiChatPopupOpen = false;
   final aiChatKey = GlobalKey<AiChatStreamState>();
   static const double _aiChatMinWidth = 240;
   late double _aiChatWidth;
@@ -500,9 +501,6 @@ class ReadingPageState extends ConsumerState<ReadingPage>
             prompt: prompt,
           ),
         ),
-        onDismiss: () {
-          cancelActiveAiRequest();
-        },
       );
     }
   }
@@ -619,7 +617,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
 
     if (shouldShowAsPopup) {
-      showModalBottomSheet(
+      setState(() => _aiChatPopupOpen = true);
+      await showModalBottomSheet(
           context: navigatorKey.currentContext!,
           isScrollControlled: true,
           showDragHandle: false,
@@ -640,6 +639,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                   ),
                 ),
               ));
+      if (mounted) setState(() => _aiChatPopupOpen = false);
     } else {
       setState(() {
         final maxWidth = _aiChatMaxWidth(navigatorKey.currentContext!);
@@ -676,7 +676,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   Widget build(BuildContext context) {
     var aiButton = IconButton(
       tooltip: L10n.of(context).aiChat,
-      icon: const Icon(Icons.auto_awesome),
+      icon: const AiChatButtonIcon(),
       onPressed: () async {
         // Determine if should show as split based on display mode
         final displayMode = Prefs().aiChatDisplayMode;
@@ -1022,6 +1022,15 @@ class ReadingPageState extends ConsumerState<ReadingPage>
                       right: 16,
                       bottom: 24,
                       child: TtsFab(),
+                    ),
+                  if (EnvVar.enableAIFeature &&
+                      bottomBarOffstage &&
+                      _aiChat == null &&
+                      !_aiChatPopupOpen)
+                    Positioned(
+                      right: 16,
+                      top: MediaQuery.of(context).padding.top + 8,
+                      child: AiRunIndicator(onTap: () => showAiChat()),
                     ),
                 ],
               ),

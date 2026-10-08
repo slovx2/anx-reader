@@ -3,7 +3,6 @@ import 'package:anx_reader/l10n/generated/L10n.dart';
 import 'package:anx_reader/models/ai_provider.dart';
 import 'package:anx_reader/providers/ai_providers.dart';
 import 'package:anx_reader/service/ai/ai_model_service.dart';
-import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/widgets/ai/ai_stream.dart';
 import 'package:anx_reader/widgets/common/anx_button.dart';
@@ -699,9 +698,6 @@ class _AiProviderDetailPageState extends ConsumerState<AiProviderDetailPage> {
     }
 
     SmartDialog.show(
-      onDismiss: () {
-        cancelActiveAiRequest();
-      },
       builder: (context) => AlertDialog(
         title: Text(l10n.commonTest),
         content: SizedBox(

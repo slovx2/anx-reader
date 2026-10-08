@@ -16,14 +16,38 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class PendingChat extends AiChat {
   @override
-  Stream<List<ChatMessage>> sendMessageStream(
-      String message, WidgetRef widgetRef, bool isRegenerate) async* {
+  Future<void> send(String message) async {
     session.status = AiRunStatus.running;
-    final messages = [ChatMessage.humanText(message), ChatMessage.ai('流式回答')];
-    state = AsyncData(messages);
-    yield messages;
+    state = AsyncData(
+        [ChatMessage.humanText(message), ChatMessage.ai('流式回答')]);
     await session.whenCancelled;
+    ref.notifyListeners();
   }
+}
+
+Widget _chatApp(ProviderContainer container) => UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(
+          navigatorKey: navigatorKey,
+          locale: const Locale('zh', 'CN'),
+          localizationsDelegates: L10n.localizationsDelegates,
+          supportedLocales: L10n.supportedLocales,
+          home: const Scaffold(body: AiChatStream())),
+    );
+
+Future<void> _initPendingProvider() async {
+  SharedPreferences.setMockInitialValues({});
+  await Prefs().initPrefs();
+  Prefs().saveAiProviders([
+    const AiProvider(
+        id: 'test',
+        title: 'Test',
+        url: 'http://localhost/v1',
+        protocol: AiProtocol.openaiResponses,
+        model: 'model')
+  ]);
+  Prefs().selectedAiService = 'test';
+  Prefs().setShowHint(HintKey.aiDataSharingConsent, false);
 }
 
 void main() {
@@ -102,29 +126,10 @@ void main() {
     });
   }
   testWidgets('生成时锁定菜单，停止完成后恢复操作', (tester) async {
-    SharedPreferences.setMockInitialValues({});
-    await Prefs().initPrefs();
-    Prefs().saveAiProviders([
-      const AiProvider(
-          id: 'test',
-          title: 'Test',
-          url: 'http://localhost/v1',
-          protocol: AiProtocol.openaiResponses,
-          model: 'model')
-    ]);
-    Prefs().selectedAiService = 'test';
-    Prefs().setShowHint(HintKey.aiDataSharingConsent, false);
+    await _initPendingProvider();
     final container = ProviderContainer(
         overrides: [aiChatProvider.overrideWith(PendingChat.new)]);
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: MaterialApp(
-          navigatorKey: navigatorKey,
-          locale: const Locale('zh', 'CN'),
-          localizationsDelegates: L10n.localizationsDelegates,
-          supportedLocales: L10n.supportedLocales,
-          home: const Scaffold(body: AiChatStream())),
-    ));
+    await tester.pumpWidget(_chatApp(container));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '你好');
     await tester.tap(find.byIcon(Icons.send));
@@ -137,6 +142,32 @@ void main() {
     expect(container.read(aiChatProvider.notifier).session.status,
         AiRunStatus.cancelled);
     expect(tester.widget<IconButton>(tune).onPressed, isNotNull);
+    await tester.pumpWidget(const SizedBox());
+    container.dispose();
+  });
+  testWidgets('关闭聊天界面不中断运行，重新打开后接上并可停止', (tester) async {
+    await _initPendingProvider();
+    final container = ProviderContainer(
+        overrides: [aiChatProvider.overrideWith(PendingChat.new)]);
+    await tester.pumpWidget(_chatApp(container));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.tap(find.byIcon(Icons.send));
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    final notifier = container.read(aiChatProvider.notifier);
+    expect(notifier.session.status, AiRunStatus.running);
+    expect(notifier.isRunning, isTrue);
+
+    await tester.pumpWidget(_chatApp(container));
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.stop), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.stop));
+    await tester.pumpAndSettle();
+    expect(notifier.session.status, AiRunStatus.cancelled);
+    expect(find.byIcon(Icons.send), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     container.dispose();
   });

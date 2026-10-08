@@ -1,4 +1,5 @@
 import 'package:anx_reader/l10n/generated/L10n.dart';
+import 'package:anx_reader/service/ai/chat_session.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/utils/toast/common.dart';
@@ -37,6 +38,7 @@ class AiStream extends ConsumerStatefulWidget {
 
 class AiStreamState extends ConsumerState<AiStream> {
   late Stream<String> stream;
+  AiChatSession _session = AiChatSession();
 
   @override
   void initState() {
@@ -44,7 +46,15 @@ class AiStreamState extends ConsumerState<AiStream> {
     stream = _createStream(widget.regenerate);
   }
 
+  @override
+  void dispose() {
+    cancelActiveAiRequest(_session);
+    super.dispose();
+  }
+
   Stream<String> _createStream(bool regenerate) {
+    cancelActiveAiRequest(_session);
+    _session = AiChatSession();
     final messages = widget.prompt.buildMessages();
     return aiGenerateStream(
       messages,
@@ -52,7 +62,8 @@ class AiStreamState extends ConsumerState<AiStream> {
       config: widget.config,
       regenerate: regenerate,
       useAgent: widget.useAgent,
-      ref: ref,
+      ref: ProviderScope.containerOf(context, listen: false),
+      session: _session,
     );
   }
 

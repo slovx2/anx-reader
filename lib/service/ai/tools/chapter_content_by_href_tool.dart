@@ -36,7 +36,7 @@ class ChapterContentByHrefTool
           timeout: const Duration(seconds: 6),
         );
 
-  final WidgetRef _ref;
+  final ProviderContainer _ref;
   final ChapterContentRepository _repository;
 
   @override

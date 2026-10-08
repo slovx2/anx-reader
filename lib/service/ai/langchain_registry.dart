@@ -21,7 +21,7 @@ import 'citations.dart';
 class LangchainAiRegistry {
   LangchainAiRegistry(this.ref, {AiChatSession? session})
       : session = session ?? AiChatSession();
-  final WidgetRef? ref;
+  final ProviderContainer? ref;
   final AiChatSession session;
 
   LangchainPipeline resolve(

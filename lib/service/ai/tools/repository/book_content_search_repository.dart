@@ -29,7 +29,7 @@ class BookContentSearchRepository {
         _searchTimeout = searchTimeout ?? const Duration(seconds: 15),
         _sessionIdleTimeout = sessionIdleTimeout ?? const Duration(minutes: 3);
 
-  final WidgetRef ref;
+  final ProviderContainer ref;
   final BooksRepository _booksRepository;
   final Duration _searchTimeout;
   final Duration _sessionIdleTimeout;

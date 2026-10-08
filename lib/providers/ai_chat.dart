@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:anx_reader/config/shared_preference_provider.dart';
 import 'package:anx_reader/providers/ai_history.dart';
+import 'package:anx_reader/providers/current_reading.dart';
 import 'package:anx_reader/service/ai/ai_history.dart';
 import 'package:anx_reader/service/ai/index.dart';
 import 'package:anx_reader/utils/ai_reasoning_parser.dart';
+import 'package:anx_reader/utils/log/common.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:langchain_core/chat_models.dart';
@@ -23,9 +25,17 @@ class AiChat extends _$AiChat {
       session.status == AiRunStatus.running ||
       _runCompletion?.isCompleted == false;
 
+  /// 本轮是否在阅读页内发起；退出阅读页时只停止这类运行。
+  bool _runStartedInReader = false;
+
   Future<void> stop() async {
-    cancelActiveAiRequest(session: session);
+    cancelActiveAiRequest(session);
     await _runCompletion?.future;
+  }
+
+  Future<void> stopReaderRun() async {
+    if (!isRunning || !_runStartedInReader) return;
+    await stop();
   }
 
   void configure(AiProvider provider) {
@@ -75,16 +85,14 @@ class AiChat extends _$AiChat {
     session.rewind(history.length);
   }
 
-  Stream<List<ChatMessage>> sendMessageStream(
-    String message,
-    WidgetRef widgetRef,
-    bool isRegenerate,
-  ) async* {
+  /// 由 provider 自己驱动整轮运行，不依赖聊天界面的生命周期。
+  Future<void> send(String message) async {
     if (isRunning) return;
+    _runStartedInReader = ref.read(currentReadingProvider).isReading;
     final sessionId = _ensureSessionId();
     final serviceId = Prefs().selectedAiService;
     final provider =
-        widgetRef.read(aiProvidersProvider.notifier).getSelectedProvider();
+        ref.read(aiProvidersProvider.notifier).getSelectedProvider();
     if (provider != null) configure(provider);
     final model = provider?.model ?? '';
     final runSession = AiChatSession.fromJson(session.toJson());
@@ -92,8 +100,8 @@ class AiChat extends _$AiChat {
     final historyLength = state.value?.length ?? 0;
     runSession.checkpoint(historyLength);
     runSession.status = AiRunStatus.running;
-    final historyNotifier = widgetRef.read(aiHistoryProvider.notifier);
-    final initialHistoryState = widgetRef
+    final historyNotifier = ref.read(aiHistoryProvider.notifier);
+    final initialHistoryState = ref
         .read(aiHistoryProvider)
         .maybeWhen(data: (value) => value, orElse: () => const []);
     AiChatHistoryEntry? entry;
@@ -140,12 +148,11 @@ class AiChat extends _$AiChat {
     final runCompletion = _runCompletion = Completer<void>();
     try {
       await historyNotifier.upsert(draftEntry);
-      state = AsyncData(updatedMessages);
-      yield updatedMessages;
+      if (identical(session, runSession)) state = AsyncData(updatedMessages);
       if (runSession.status == AiRunStatus.cancelled) return;
       await for (final event in aiChatEvents(
         messages,
-        ref: widgetRef,
+        ref: ref.container,
         session: runSession,
       )) {
         assistantResponse = event.content;
@@ -157,13 +164,12 @@ class AiChat extends _$AiChat {
 
         updatedMessages = updatedMessagesWithResponse;
         if (identical(session, runSession)) state = AsyncData(updatedMessages);
-        yield updatedMessages;
       }
-    } catch (_) {
+    } catch (error, stack) {
       if (runSession.status != AiRunStatus.cancelled) {
         runSession.status = AiRunStatus.failed;
       }
-      rethrow;
+      AnxLog.severe('AI chat run failed: $error', error, stack);
     } finally {
       if (runSession.status == AiRunStatus.running) {
         runSession.cancel();
