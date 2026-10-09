@@ -998,7 +998,11 @@ class EpubPlayerState extends ConsumerState<EpubPlayer>
     Book book = widget.book;
     book.lastReadPosition = cfi;
     book.readingPercentage = percentage;
-    await bookDao.updateBook(book);
+    await bookDao.updateReadingProgress(
+      book.id,
+      lastReadPosition: cfi,
+      readingPercentage: percentage,
+    );
     if (mounted) {
       ref.read(bookListProvider.notifier).refresh();
     }

@@ -26,6 +26,24 @@ class BookDao extends BaseDao {
     );
   }
 
+  /// 只更新阅读进度相关字段，避免用内存中过期的 Book 覆盖其他字段
+  Future<void> updateReadingProgress(
+    int bookId, {
+    required String lastReadPosition,
+    required double readingPercentage,
+  }) async {
+    await update(
+      table,
+      {
+        'last_read_position': lastReadPosition,
+        'reading_percentage': readingPercentage,
+        'update_time': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [bookId],
+    );
+  }
+
   Future<List<Book>> selectBooks({bool includeDeleted = true}) {
     return queryList(
       table,
