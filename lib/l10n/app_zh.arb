@@ -927,5 +927,9 @@
   "aiCitationBookUnavailable": "引用的书籍已删除或文件不可用。",
   "aiCitationFileChanged": "书籍文件已改变，无法可靠定位这条引用。",
   "aiCitationWait": "请在生成完成或停止后打开引用。",
-  "aiCitationOpenFailed": "无法打开引用位置。"
+  "aiCitationOpenFailed": "无法打开引用位置。",
+  "readingCloudProgressTitle": "云端进度已更新",
+  "readingCloudProgressContent": "同步到的云端进度为 {cloudProgress}，当前阅读位置为 {currentProgress}。是否跳转到云端进度？",
+  "readingCloudProgressStay": "保持当前位置",
+  "readingCloudProgressJump": "跳转"
 }

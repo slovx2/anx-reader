@@ -43,6 +43,13 @@ class Sync extends _$Sync {
   // Flag to prevent multiple sync direction dialogs
   bool _isShowingDirectionDialog = false;
 
+  // 云端数据库下载并替换本地数据库成功后发出事件，供阅读页等检查数据变化
+  final StreamController<void> _databaseDownloadedController =
+      StreamController<void>.broadcast();
+
+  Stream<void> get onDatabaseDownloaded =>
+      _databaseDownloadedController.stream;
+
   @override
   SyncStateModel build() {
     return const SyncStateModel(
@@ -285,7 +292,10 @@ class Sync extends _$Sync {
     }
 
     try {
-      await syncDatabase(finalDirection);
+      final databaseDownloaded = await syncDatabase(finalDirection);
+      if (databaseDownloaded) {
+        _databaseDownloadedController.add(null);
+      }
 
       if (await isCurrentEmpty()) {
         await _showSyncAbortedDialog();
@@ -400,9 +410,11 @@ class Sync extends _$Sync {
     ref.read(syncStatusProvider.notifier).refresh();
   }
 
-  Future<void> syncDatabase(SyncDirection direction) async {
+  /// 返回值表示本次是否用云端数据库替换了本地数据库
+  Future<bool> syncDatabase(SyncDirection direction) async {
     final client = _syncClient;
-    if (client == null) return;
+    if (client == null) return false;
+    bool downloaded = false;
 
     String remoteDbFileName = 'database$currentDbVersion.db';
     RemoteFile? remoteDb = await client.readProps('anx/$remoteDbFileName');
@@ -448,11 +460,12 @@ class Sync extends _$Sync {
               await DatabaseSyncManager.showSyncErrorDialog(result);
               AnxLog.severe('Database sync failed: ${result.message}');
               // Don't throw exception, let sync continue with file sync
-              return;
+              return false;
             }
+            downloaded = true;
           } else {
             await _showSyncAbortedDialog();
-            return;
+            return false;
           }
           break;
 
@@ -490,8 +503,9 @@ class Sync extends _$Sync {
               await DatabaseSyncManager.showSyncErrorDialog(result);
               AnxLog.severe('Database sync failed: ${result.message}');
               // Don't throw exception, let sync continue with file sync
-              return;
+              return false;
             }
+            downloaded = true;
           }
           break;
       }
@@ -501,6 +515,7 @@ class Sync extends _$Sync {
       if (newRemoteDb != null) {
         Prefs().lastUploadBookDate = newRemoteDb.mTime;
       }
+      return downloaded;
     } catch (e) {
       AnxLog.severe('Failed to sync database\n$e');
       rethrow;

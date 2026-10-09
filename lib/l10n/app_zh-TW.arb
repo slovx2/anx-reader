@@ -891,5 +891,9 @@
   "aiModelSwitchTitle": "切換模型",
   "aiModelEnterManually": "輸入模型名稱",
   "aiModelOrSelectBelow": "或從列表中選擇：",
-  "aiChatFontSize": "字體大小"
+  "aiChatFontSize": "字體大小",
+  "readingCloudProgressTitle": "雲端進度已更新",
+  "readingCloudProgressContent": "同步到的雲端進度為 {cloudProgress}，目前閱讀位置為 {currentProgress}。是否跳轉到雲端進度？",
+  "readingCloudProgressStay": "保持目前位置",
+  "readingCloudProgressJump": "跳轉"
 }

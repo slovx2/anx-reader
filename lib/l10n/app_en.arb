@@ -933,5 +933,9 @@
   "aiCitationBookUnavailable": "The cited book has been deleted or its file is unavailable.",
   "aiCitationFileChanged": "The book file has changed. This citation can no longer be located reliably.",
   "aiCitationWait": "Stop generation before opening a citation.",
-  "aiCitationOpenFailed": "Unable to open the cited location."
+  "aiCitationOpenFailed": "Unable to open the cited location.",
+  "readingCloudProgressTitle": "Cloud Progress Updated",
+  "readingCloudProgressContent": "The synced cloud progress of this book is {cloudProgress}, and your current position is {currentProgress}. Jump to the cloud progress?",
+  "readingCloudProgressStay": "Stay Here",
+  "readingCloudProgressJump": "Jump"
 }

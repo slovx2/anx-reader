@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:anx_reader/config/shared_preference_provider.dart';
+import 'package:anx_reader/dao/book.dart';
 import 'package:anx_reader/dao/reading_time.dart';
 import 'package:anx_reader/dao/theme.dart';
 import 'package:anx_reader/enums/ai_panel_position.dart';
@@ -18,6 +19,7 @@ import 'package:anx_reader/page/book_player/epub_player.dart';
 import 'package:anx_reader/providers/sync.dart';
 import 'package:anx_reader/service/ai/prompt_generate.dart';
 import 'package:anx_reader/utils/env_var.dart';
+import 'package:anx_reader/utils/log/common.dart';
 import 'package:anx_reader/utils/toast/common.dart';
 import 'package:anx_reader/utils/ui/status_bar.dart';
 import 'package:anx_reader/widgets/ai/ai_chat_stream.dart';
@@ -86,6 +88,9 @@ class ReadingPageState extends ConsumerState<ReadingPage>
   late double _aiChatHeight;
   bool _isResizingAiChat = false;
   bool bookmarkExists = false;
+  StreamSubscription<void>? _databaseDownloadedSub;
+  bool _wasBackgrounded = false;
+  bool _cloudProgressDialogShowing = false;
 
   late final FocusNode _readerFocusNode;
   // late final VolumeKeyBoard _volumeKeyBoard;
@@ -109,6 +114,8 @@ class ReadingPageState extends ConsumerState<ReadingPage>
     }
 
     WidgetsBinding.instance.addObserver(this);
+    _databaseDownloadedSub =
+        Sync().onDatabaseDownloaded.listen((_) => _checkCloudProgress());
     _readTimeWatch.start();
     _sessionStart = DateTime.now();
     setAwakeTimer(Prefs().awakeTime);
@@ -137,6 +144,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
 
   @override
   void dispose() {
+    _databaseDownloadedSub?.cancel();
     Sync().syncData(SyncDirection.upload, ref, trigger: SyncTrigger.auto);
     _readTimeWatch.stop();
     _awakeTimer?.cancel();
@@ -275,6 +283,14 @@ class ReadingPageState extends ConsumerState<ReadingPage>
           _readTimeWatch.start();
         }
         _sessionStart ??= DateTime.now();
+        // 从后台回到前台时同步一次，以便拉取其他设备的阅读进度
+        if (_wasBackgrounded) {
+          _wasBackgrounded = false;
+          if (Prefs().webdavStatus) {
+            Sync().syncData(SyncDirection.both, ref,
+                trigger: SyncTrigger.auto);
+          }
+        }
         break;
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
@@ -286,6 +302,7 @@ class ReadingPageState extends ConsumerState<ReadingPage>
         if (state == AppLifecycleState.paused ||
             state == AppLifecycleState.hidden ||
             state == AppLifecycleState.detached) {
+          _wasBackgrounded = true;
           final elapsedSeconds = _readTimeWatch.elapsed.inSeconds;
           if (elapsedSeconds > 5) {
             epubPlayerKey.currentState?.saveReadingProgress();
@@ -317,6 +334,76 @@ class ReadingPageState extends ConsumerState<ReadingPage>
 
   void resetAwakeTimer() {
     setAwakeTimer(Prefs().awakeTime);
+  }
+
+  /// 云端数据库下载后，若当前书的云端进度与阅读位置不同，询问是否跳转
+  Future<void> _checkCloudProgress() async {
+    if (!mounted || _cloudProgressDialogShowing) return;
+    final player = epubPlayerKey.currentState;
+    if (player == null || player.cfi.isEmpty) return;
+    final currentPercentage = player.percentage;
+
+    final Book cloudBook;
+    try {
+      cloudBook = await bookDao.selectBookById(_book.id);
+    } catch (e) {
+      AnxLog.warning('ReadingPage: Failed to load cloud progress: $e');
+      return;
+    }
+    final cloudCfi = cloudBook.lastReadPosition;
+    if (cloudBook.isDeleted ||
+        cloudCfi.isEmpty ||
+        cloudCfi == player.cfi ||
+        // 不同设备排版不同，同一位置的 cfi 也会不同，进度差异极小时视为相同
+        (cloudBook.readingPercentage - currentPercentage).abs() < 0.001) {
+      return;
+    }
+    if (!mounted) return;
+
+    _cloudProgressDialogShowing = true;
+    bool? jump;
+    try {
+      jump = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          final l10n = L10n.of(context);
+          return AlertDialog(
+            title: Text(l10n.readingCloudProgressTitle),
+            content: Text(l10n.readingCloudProgressContent(
+              '${(cloudBook.readingPercentage * 100).toStringAsFixed(2)}%',
+              '${(currentPercentage * 100).toStringAsFixed(2)}%',
+            )),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: Text(l10n.readingCloudProgressStay),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(true),
+                child: Text(l10n.readingCloudProgressJump),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      _cloudProgressDialogShowing = false;
+    }
+
+    if (!mounted) return;
+    final latestPlayer = epubPlayerKey.currentState;
+    if (latestPlayer == null) return;
+    if (jump == true) {
+      try {
+        await latestPlayer.goToCfi(cloudCfi);
+      } catch (e) {
+        AnxLog.warning('ReadingPage: Failed to jump to cloud progress: $e');
+      }
+    } else {
+      // 下载的云端库已覆盖本地进度，写回当前阅读位置
+      await latestPlayer.saveReadingProgress();
+    }
   }
 
   void showBottomBar() {
